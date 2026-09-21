@@ -78,8 +78,16 @@ export default function Home() {
     const savedAiKey = localStorage.getItem('ai_api_key');
     const savedAiModel = localStorage.getItem('ai_model');
 
-    if (savedSttKey || savedSttBucket) setSttConfig(prev => ({ ...prev, apiKey: savedSttKey || '', provider: savedSttProvider || 'GoogleCloud', gcsBucket: savedSttBucket || '' }));
-    if (savedAiKey) setAiConfig(prev => ({ ...prev, apiKey: savedAiKey, model: savedAiModel || 'gemini-2.0-flash' }));
+    const validModel = (savedAiModel && !savedAiModel.includes('2.0') && !savedAiModel.includes('1.5'))
+      ? savedAiModel 
+      : 'gemini-3.6-flash';
+
+    if (savedSttKey || savedSttBucket) {
+      setSttConfig(prev => ({ ...prev, apiKey: savedSttKey || '', provider: savedSttProvider || 'GoogleCloud', gcsBucket: savedSttBucket || '' }));
+    }
+    if (savedAiKey || savedAiModel) {
+      setAiConfig(prev => ({ ...prev, apiKey: savedAiKey || '', model: validModel }));
+    }
   }, []);
 
   // Update Campaign fields when selection changes
@@ -572,7 +580,7 @@ export default function Home() {
                     }`}
                   >
                     <span>Edited Transcript (API 2)</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/30 font-mono">Max 3–4 Paragraphs</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/30 font-mono">3–4 Paragraphs</span>
                   </button>
 
                   <button
@@ -583,7 +591,7 @@ export default function Home() {
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                     }`}
                   >
-                    <span>QA Results & Checkpoints</span>
+                    <span>QA Results &amp; Checkpoints</span>
                   </button>
 
                   <button
@@ -605,7 +613,7 @@ export default function Home() {
                     <div className="flex-1 flex flex-col space-y-4">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-slate-400">
-                          AI-Edited Transcript (API 2 Output — Max 3–4 Paragraphs)
+                          Standardized Call Summary (Anonymous 3–4 Paragraphs)
                         </span>
                         <div className="flex gap-2">
                           <button
@@ -627,7 +635,7 @@ export default function Home() {
                         value={editedModifiedTranscript}
                         onChange={(e) => setEditedModifiedTranscript(e.target.value)}
                         className="w-full flex-1 min-h-[420px] bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-200 text-sm leading-relaxed font-sans focus:outline-none focus:border-indigo-500 resize-y"
-                        placeholder="Click '2. AI Edit & QA (API 2)' to generate the 3–4 paragraph edited transcript..."
+                        placeholder="Click '2. AI Edit & QA (API 2)' to generate the anonymous 3–4 paragraph call transcript..."
                       />
                     </div>
                   )}
@@ -638,24 +646,24 @@ export default function Home() {
                       {qaData ? (
                         <>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <Checkcard label="Prospect Identification" status={qaData.checkpoints?.prospect_identification} />
+                            <Checkcard label="Anonymous Format (No Names)" status={qaData.checkpoints?.anonymous_no_personal_names ?? true} />
                             <Checkcard label="TGS Tech Info Introduction" status={qaData.checkpoints?.tgs_tech_info_introduction} />
-                            <Checkcard label="Cold Call Context" status={qaData.checkpoints?.cold_call_context} />
-                            <Checkcard label="Campaign Context" status={qaData.checkpoints?.campaign_context} />
-                            <Checkcard label="Value Proposition Present" status={qaData.checkpoints?.value_proposition} />
-                            <Checkcard label="Implementation Question Asked" status={qaData.checkpoints?.implementation_question} />
+                            <Checkcard label="Cold Call &amp; LinkedIn Context" status={qaData.checkpoints?.cold_call_linkedin_context ?? qaData.checkpoints?.cold_call_context} />
+                            <Checkcard label="LMS Value Proposition" status={qaData.checkpoints?.lms_value_proposition ?? qaData.checkpoints?.value_proposition} />
+                            <Checkcard label="Q1: Evaluation Inquired" status={qaData.checkpoints?.evaluation_question_asked ?? qaData.checkpoints?.implementation_question} />
                             <Checkcard
-                              label="Implementation Response"
-                              textValue={qaData.qualification?.implementation_response || 'NOT_CAPTURED'}
-                              status={qaData.qualification?.implementation_response === 'YES'}
+                              label="Q1 Response (Yes / Probably / Could be / Might be)"
+                              textValue={qaData.qualification?.implementation_response || 'Not Captured'}
+                              status={['Yes', 'Probably', 'Could be', 'Might be', 'YES'].includes(qaData.qualification?.implementation_response || '')}
                             />
+                            <Checkcard label="Q2: Expected Timeline Inquired" status={qaData.checkpoints?.evaluation_timeline_asked ?? qaData.checkpoints?.implementation_timeline} />
                             <Checkcard
-                              label="Implementation Timeline"
+                              label="Q2 Timeline (0-2m / 2-3m / 3-6m)"
                               textValue={qaData.qualification?.implementation_timeline || '[Not Captured]'}
-                              status={qaData.qualification?.implementation_timeline !== '[Not Captured]'}
+                              status={qaData.qualification?.implementation_timeline !== '[Not Captured]' && qaData.qualification?.implementation_timeline !== 'Not Captured'}
                             />
                             <Checkcard label="Specialist Follow-up Mentioned" status={qaData.checkpoints?.specialist_followup} />
-                            <Checkcard label="Professional Call Closing" status={qaData.checkpoints?.closing} />
+                            <Checkcard label="Comprehensive Closing Statement" status={qaData.checkpoints?.comprehensive_closing_statement ?? qaData.checkpoints?.closing} />
                           </div>
 
                           {qaData.missingInformation && qaData.missingInformation.length > 0 && (
@@ -777,7 +785,7 @@ export default function Home() {
                     value={sttConfig.apiKey}
                     onChange={(e) => setSttConfig({ ...sttConfig, apiKey: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 font-mono"
-                    placeholder="Enter Google Console API Key (AIZA...)"
+                    placeholder="Leave blank to use STT_API_KEY from .env.local"
                   />
                 </div>
 
@@ -837,10 +845,10 @@ export default function Home() {
                     value={aiConfig.apiKey}
                     onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 font-mono"
-                    placeholder="Enter Google AI Studio API Key (AIZA...)"
+                    placeholder="Leave blank to use GEMINI_API_KEY from .env.local"
                   />
                   <p className="text-[10px] text-slate-500 mt-1">
-                    Get your key from Google AI Studio (aistudio.google.com)
+                    Uses GEMINI_API_KEY from .env.local by default if left empty.
                   </p>
                 </div>
 
@@ -851,10 +859,10 @@ export default function Home() {
                     onChange={(e) => setAiConfig({ ...aiConfig, model: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
                   >
-                    <option value="gemini-3.6-flash">gemini-3.6-flash (Recommended)</option>
-                    <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-                    <option value="gemini-1.5-flash">gemini-1.5-flash (Fast & High Availability)</option>
-                    <option value="gemini-1.5-pro">gemini-1.5-pro (High Quality)</option>
+                    <option value="gemini-3.6-flash">gemini-3.6-flash (Recommended - Fast &amp; Powerful)</option>
+                    <option value="gemini-3.5-flash">gemini-3.5-flash (High Quality &amp; Fast)</option>
+                    <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Ultra Fast &amp; Lightweight)</option>
+                    <option value="gemini-3-flash-preview">gemini-3-flash-preview (Preview Tier)</option>
                   </select>
                 </div>
 

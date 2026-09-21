@@ -1,9 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AssemblyAI } from 'assemblyai';
 import { Storage } from '@google-cloud/storage';
+import { SpeechClient } from '@google-cloud/speech';
 import { STTConfig } from '@/lib/types';
 
-// Upload helper supporting both @google-cloud/storage SDK (Service Account) and REST API Key
+function getSpeechClient(): SpeechClient {
+  let speechOptions: any = {};
+  if (process.env.GOOGLE_CLOUD_PROJECT) {
+    speechOptions.projectId = process.env.GOOGLE_CLOUD_PROJECT;
+  }
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    const credVal = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
+    if (credVal.startsWith('{')) {
+      speechOptions.credentials = JSON.parse(credVal);
+    } else {
+      speechOptions.keyFilename = credVal;
+    }
+  }
+  return new SpeechClient(speechOptions);
+}
+
+// Upload helper supporting both @google-cloud/storage SDK (Service Account / ADC) and REST API Key
 async function uploadFileToGCS(
   buffer: Buffer,
   gcsBucket: string,
@@ -61,6 +78,73 @@ async function uploadFileToGCS(
   }
 }
 
+// Helper to format Google Speech results word-by-word and line-by-line with speaker diarization and timestamps
+function formatGoogleSpeechResults(results: any[]): string {
+  if (!results || results.length === 0) {
+    return 'No speech recognized in audio file.';
+  }
+
+  // Check if any results contain word-level speaker diarization tags
+  let allWordsWithTags: any[] = [];
+  for (const res of results) {
+    const words = res.alternatives?.[0]?.words || [];
+    for (const w of words) {
+      if (w.speakerTag !== undefined && w.speakerTag !== null) {
+        allWordsWithTags.push(w);
+      }
+    }
+  }
+
+  if (allWordsWithTags.length > 0) {
+    const turns: { speaker: number; words: string[]; start: string; end: string }[] = [];
+    let currentTurn: { speaker: number; words: string[]; start: string; end: string } | null = null;
+
+    for (const w of allWordsWithTags) {
+      const speaker = w.speakerTag || 1;
+      const wordText = w.word || '';
+      const startSec = (parseFloat(w.startTime?.seconds || '0') + (w.startTime?.nanos || 0) / 1e9).toFixed(1);
+      const endSec = (parseFloat(w.endTime?.seconds || '0') + (w.endTime?.nanos || 0) / 1e9).toFixed(1);
+
+      if (!currentTurn || currentTurn.speaker !== speaker) {
+        if (currentTurn) turns.push(currentTurn);
+        currentTurn = { speaker, words: [wordText], start: startSec, end: endSec };
+      } else {
+        currentTurn.words.push(wordText);
+        currentTurn.end = endSec;
+      }
+    }
+    if (currentTurn) turns.push(currentTurn);
+
+    if (turns.length > 0) {
+      return turns
+        .map(t => `[${t.start}s - ${t.end}s] [Speaker ${t.speaker}]: ${t.words.join(' ')}`)
+        .join('\n\n');
+    }
+  }
+
+  // Line-by-line utterance segmentation with timestamps
+  const lines: string[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const alt = results[i].alternatives?.[0];
+    const text = alt?.transcript?.trim();
+    if (!text) continue;
+
+    const words = alt?.words || [];
+    let timeLabel = '';
+    if (words.length > 0) {
+      const firstWord = words[0];
+      const lastWord = words[words.length - 1];
+      const startSec = (parseFloat(firstWord.startTime?.seconds || '0') + (firstWord.startTime?.nanos || 0) / 1e9).toFixed(1);
+      const endSec = (parseFloat(lastWord.endTime?.seconds || '0') + (lastWord.endTime?.nanos || 0) / 1e9).toFixed(1);
+      timeLabel = `[${startSec}s - ${endSec}s] `;
+    }
+
+    lines.push(`${timeLabel}[Line ${i + 1}]: ${text}`);
+  }
+
+  return lines.join('\n\n') || 'No speech recognized in audio file.';
+}
+
 // Google Cloud Storage + Speech longRunningRecognize implementation
 async function transcribeWithGCSAndLongRunning(
   buffer: Buffer,
@@ -84,10 +168,15 @@ async function transcribeWithGCSAndLongRunning(
   const gsUri = `gs://${gcsBucket}/${objectName}`;
 
   try {
-    // Step 2: Invoke longRunningRecognize
     const config: Record<string, any> = {
       languageCode: language || 'en-US',
       enableAutomaticPunctuation: true,
+      enableWordTimeOffsets: true,
+      diarizationConfig: {
+        enableSpeakerDiarization: true,
+        minSpeakerCount: 2,
+        maxSpeakerCount: 3,
+      },
       model: 'default',
     };
 
@@ -95,77 +184,74 @@ async function transcribeWithGCSAndLongRunning(
     if (ext === 'flac') config.encoding = 'FLAC';
     if (ext === 'wav') config.encoding = 'LINEAR16';
 
-    const recognizeRes = await fetch(`https://speech.googleapis.com/v1/speech:longrunningrecognize?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    // Strategy 1: Use @google-cloud/speech SDK (authenticated with Google Cloud IAM / ADC)
+    try {
+      const speechClient = getSpeechClient();
+      const [operation] = await speechClient.longRunningRecognize({
         config,
         audio: { uri: gsUri },
-      }),
-    });
-
-    if (!recognizeRes.ok) {
-      const errData = await recognizeRes.json().catch(() => ({}));
-      const errObj = errData?.error || {};
-      console.error('LongRunningRecognize Error:', {
-        service: 'speech.googleapis.com',
-        methodName: 'LongRunningRecognize',
-        httpStatus: recognizeRes.status,
-        googleStatus: errObj.status || 'RECOGNIZE_ERROR',
-        googleMessage: errObj.message || `HTTP ${recognizeRes.status}`,
       });
-      throw new Error(`Google Speech LongRunningRecognize Failed (${recognizeRes.status}): ${errObj.message || 'API request failed'}`);
-    }
+      const [response] = await operation.promise();
+      const results = response.results || [];
+      return formatGoogleSpeechResults(results);
+    } catch (sdkError: any) {
+      console.warn('SpeechClient SDK longRunningRecognize failed, attempting REST API fallback:', sdkError?.message);
 
-    const opData = await recognizeRes.json();
-    const opName = opData.name;
+      // Strategy 2: REST fallback with API key
+      const recognizeRes = await fetch(`https://speech.googleapis.com/v1/speech:longrunningrecognize?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config,
+          audio: { uri: gsUri },
+        }),
+      });
 
-    if (!opName) {
-      throw new Error('LongRunningRecognize did not return a valid operation name.');
-    }
-
-    // Step 3: Poll for Operation Completion
-    let isDone = false;
-    let attempts = 0;
-    let finalResult: any = null;
-
-    while (!isDone && attempts < 60) {
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      attempts++;
-
-      const pollRes = await fetch(`https://speech.googleapis.com/v1/operations/${opName}?key=${apiKey}`);
-      if (!pollRes.ok) continue;
-
-      const pollData = await pollRes.json();
-      if (pollData.done) {
-        isDone = true;
-        if (pollData.error) {
-          console.error('Speech Operation Error:', {
-            service: 'speech.googleapis.com',
-            methodName: 'GetOperation',
-            googleStatus: pollData.error.code,
-            googleMessage: pollData.error.message,
-          });
-          throw new Error(`Google Speech Operation Failed: ${pollData.error.message}`);
-        }
-        finalResult = pollData.response;
+      if (!recognizeRes.ok) {
+        const errData = await recognizeRes.json().catch(() => ({}));
+        const errObj = errData?.error || {};
+        throw new Error(
+          `Google Speech LongRunningRecognize Failed: SDK Error: "${sdkError?.message || 'N/A'}". REST Error (${recognizeRes.status}): "${errObj.message || 'API request failed'}"`
+        );
       }
+
+      const opData = await recognizeRes.json();
+      const opName = opData.name;
+
+      if (!opName) {
+        throw new Error('LongRunningRecognize did not return a valid operation name.');
+      }
+
+      let isDone = false;
+      let attempts = 0;
+      let finalResult: any = null;
+
+      while (!isDone && attempts < 60) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        attempts++;
+
+        const pollRes = await fetch(`https://speech.googleapis.com/v1/operations/${opName}?key=${apiKey}`);
+        if (!pollRes.ok) continue;
+
+        const pollData = await pollRes.json();
+        if (pollData.done) {
+          isDone = true;
+          if (pollData.error) {
+            throw new Error(`Google Speech Operation Failed: ${pollData.error.message}`);
+          }
+          finalResult = pollData.response;
+        }
+      }
+
+      if (!isDone || !finalResult) {
+        throw new Error('Speech-to-Text long-running recognition timed out after 3 minutes.');
+      }
+
+      const results = finalResult.results || [];
+      return formatGoogleSpeechResults(results);
     }
-
-    if (!isDone || !finalResult) {
-      throw new Error('Speech-to-Text long-running recognition timed out after 3 minutes.');
-    }
-
-    const results = finalResult.results || [];
-    const fullTranscript = results
-      .map((r: any) => r.alternatives?.[0]?.transcript || '')
-      .filter((t: string) => t.trim().length > 0)
-      .join('\n\n');
-
-    return fullTranscript || 'No speech recognized in audio file.';
-
   } finally {
-    // Step 4: Temporary GCS File Cleanup
+    // Cleanup temporary GCS object
     try {
       let storageOptions: any = {};
       if (process.env.GOOGLE_CLOUD_PROJECT) {
@@ -197,14 +283,21 @@ async function transcribeWithGoogleCloud(
 ): Promise<string> {
   // If a GCS Bucket is configured, use Google Cloud Storage + LongRunningRecognize
   if (gcsBucket && gcsBucket.trim().length > 0) {
-    return await transcribeWithGCSAndLongRunning(buffer, fileName, apiKey, gcsBucket, language);
+    try {
+      return await transcribeWithGCSAndLongRunning(buffer, fileName, apiKey, gcsBucket, language);
+    } catch (gcsErr: any) {
+      console.warn('GCS LongRunningRecognize error, checking if synchronous recognize can process audio:', gcsErr?.message);
+      if (buffer.length > 10 * 1024 * 1024) {
+        throw gcsErr;
+      }
+    }
   }
 
-  // Synchronous recognize request for short audio (< 1 min)
-  const base64Audio = buffer.toString('base64');
+  // Synchronous recognize request for audio
   const config: Record<string, any> = {
     languageCode: language || 'en-US',
     enableAutomaticPunctuation: true,
+    enableWordTimeOffsets: true,
     model: 'default',
   };
 
@@ -213,6 +306,24 @@ async function transcribeWithGoogleCloud(
   if (ext === 'flac') config.encoding = 'FLAC';
   if (ext === 'wav') config.encoding = 'LINEAR16';
 
+  // Strategy 1: SpeechClient SDK (IAM / ADC)
+  try {
+    const speechClient = getSpeechClient();
+    const [response] = await speechClient.recognize({
+      config,
+      audio: { content: buffer },
+    });
+
+    const dataResults = response.results || [];
+    if (dataResults.length > 0) {
+      return formatGoogleSpeechResults(dataResults);
+    }
+  } catch (sdkErr: any) {
+    console.warn('SpeechClient synchronous recognize failed, trying REST recognize fallback:', sdkErr?.message);
+  }
+
+  // Strategy 2: REST recognize with API key
+  const base64Audio = buffer.toString('base64');
   const response = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -227,15 +338,6 @@ async function transcribeWithGoogleCloud(
     const errObj = errData?.error || {};
     const message = errObj.message || `Google API HTTP ${response.status}`;
 
-    console.error('Synchronous Recognize Error:', {
-      service: 'speech.googleapis.com',
-      methodName: 'Recognize',
-      httpStatus: response.status,
-      googleStatus: errObj.status || 'RECOGNIZE_ERROR',
-      googleReason: errObj.reason || 'SYNC_AUDIO_ERROR',
-      googleMessage: message,
-    });
-
     if (message.toLowerCase().includes('too long') || message.toLowerCase().includes('longrunningrecognize')) {
       throw new Error(
         `Google Cloud Speech-to-Text: Audio recording is longer than 1 minute. Please enter your Google Cloud Storage Bucket Name in Transcription API Settings (API 1) to enable LongRunningRecognize.`
@@ -246,16 +348,7 @@ async function transcribeWithGoogleCloud(
   }
 
   const data = await response.json();
-  if (!data.results || data.results.length === 0) {
-    return 'No speech recognized in audio file.';
-  }
-
-  const fullTranscript = data.results
-    .map((result: any) => result.alternatives?.[0]?.transcript || '')
-    .filter((text: string) => text.trim().length > 0)
-    .join('\n\n');
-
-  return fullTranscript || 'No speech recognized in audio file.';
+  return formatGoogleSpeechResults(data.results || []);
 }
 
 async function transcribeWithAssemblyAI(buffer: Buffer, apiKey: string): Promise<string> {

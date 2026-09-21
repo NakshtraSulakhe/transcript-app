@@ -50,8 +50,8 @@ export interface QACheckpoints {
   cold_call_context?: boolean;
   value_proposition_present?: boolean;
   implementation_question_asked?: boolean;
-  implementation_response?: 'YES' | 'NO' | 'UNCLEAR' | 'NOT_CAPTURED';
-  implementation_timeline?: '[0–3 Months]' | '[3–6 Months]' | '[6–9 Months]' | '[Not Captured]';
+  implementation_response?: 'Yes' | 'Probably' | 'Could be' | 'Might be' | 'No' | 'Not Captured' | string;
+  implementation_timeline?: 'Zero to two months' | 'Two to three months' | 'Three to six months' | '[Not Captured]' | string;
   timeline_captured?: boolean;
   specialist_followup_mentioned?: boolean;
   call_closing_present?: boolean;

@@ -4,7 +4,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const apiKey = body.apiKey || process.env.GEMINI_API_KEY;
-    const model = body.model || 'gemini-2.0-flash';
+    const model = body.model || 'gemini-3.6-flash';
 
     if (!apiKey) {
       return NextResponse.json(

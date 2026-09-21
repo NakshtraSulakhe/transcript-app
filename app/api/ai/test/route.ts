@@ -18,9 +18,9 @@ export async function POST(request: NextRequest) {
     const modelsToTry = Array.from(new Set([
       requestedModel,
       'gemini-3.6-flash',
-      'gemini-2.0-flash',
-      'gemini-1.5-flash',
-      'gemini-1.5-pro'
+      'gemini-3.5-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-3-flash-preview'
     ]));
 
     let lastErrorMessage = '';
@@ -48,10 +48,18 @@ export async function POST(request: NextRequest) {
         lastErrorMessage = errorData?.error?.message || `HTTP ${response.status}`;
         const errLower = lastErrorMessage.toLowerCase();
 
+        if (response.status === 402) {
+          return NextResponse.json(
+            { success: false, error: 'Connection Failed: Your Google AI Studio prepayment credits are depleted (402). Please visit https://ai.studio/projects or use a key from a project with active free tier credits.' },
+            { status: 402 }
+          );
+        }
+
         // If model is busy, unavailable, or model name not found in this region/version, try next fallback model
         if (
           errLower.includes('high demand') ||
           errLower.includes('not found') ||
+          errLower.includes('no longer available') ||
           response.status === 503 ||
           response.status === 429 ||
           response.status === 404

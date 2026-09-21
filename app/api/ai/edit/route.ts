@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
     const aiConfig: AIConfig = body.aiConfig || {
       provider: 'Google AI Studio',
       apiKey: process.env.GEMINI_API_KEY || '',
-      model: 'gemini-2.0-flash',
+      model: 'gemini-3.6-flash',
       temperature: 0.2,
       maxTokens: 2048,
     };
@@ -27,74 +27,80 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const targetCompany = leadInfo.companyName || 'the prospect organization';
+    const defaultAsset = campaignInfo.assetTitle || 'Learning Management System (LMS)';
+    const defaultValueProp = campaignInfo.valueProposition || 'identifying and implementing Learning Management System (LMS) solutions that streamline training delivery, learner engagement, and performance tracking, enabling organizations to enhance workforce development and achieve better learning outcomes';
+
     const prompt = `
 ROLE:
-You are an AI Call Transcript Editing and QA Engine.
+You are an expert AI Cold Call Quality Assurance and Transcript Editing Engine.
 
-CALL TYPE:
-Cold Call
+OBJECTIVE:
+Transform the raw spoken audio transcript into a polished, professional, cohesive narrative transcript composed of EXACTLY 3 TO 4 PARAGRAPHS.
 
-CALLING COMPANY:
-TGS Tech Info
+STRICT ANONYMITY REQUIREMENT:
+- DO NOT INCLUDE ANY PERSONAL NAMES for either the prospect or the agent anywhere in the edited transcript.
+- Do NOT use names like "Alex", "John", "Sarah", or any spoken personal names.
+- Refer to the caller as "the representative", "the caller", or "the TGS Tech Info specialist".
+- Refer to the person called as "the prospect", "the contact", or "the organization's representative".
+- The calling company name MUST be referenced as "TGS Tech Info".
+- The target company name ("${targetCompany}") may be referenced.
 
-LEAD REFERENCE INFORMATION:
-- First Name: ${leadInfo.firstName || 'Not Provided'}
-- Last Name: ${leadInfo.lastName || 'Not Provided'}
-- Company Name: ${leadInfo.companyName || 'Not Provided'}
-- Email Address: ${leadInfo.email || 'Not Provided'}
-- Job Title: ${leadInfo.jobTitle || 'Not Provided'}
+PARAGRAPH STRUCTURE (MUST BE 3 TO 4 PARAGRAPHS):
 
-CAMPAIGN INFORMATION:
-- Campaign Name: ${campaignInfo.campaignName || 'Outreach'}
-- Asset Title: ${campaignInfo.assetTitle || 'Solution'}
-- Value Proposition: ${campaignInfo.valueProposition || 'Helping organizations optimize performance.'}
+Paragraph 1 (Introduction & Cold Call Context):
+- Position the interaction as an outbound cold call from TGS Tech Info.
+- Reference that the outreach was initiated following a review of the prospect's professional profile on LinkedIn.
+- Confirm establishing contact with the organization's representative in a professional, courteous manner, without using any personal names.
+
+Paragraph 2 (Purpose of Call & LMS Value Proposition):
+- Clearly articulate the core purpose of the outreach on behalf of TGS Tech Info.
+- Introduce the Learning Management System (LMS) value proposition: explaining that TGS Tech Info helps learning and development teams with ${defaultValueProp}.
+
+Paragraph 3 (The Two Key Questions & Standardized Responses):
+- Incorporate Question 1: The representative asked whether the organization is currently evaluating, exploring, or researching a new Learning Management System (LMS) solution.
+  - The prospect's evaluation status MUST be classified and reflected as exactly one of these four standardized options:
+    "Yes", "Probably", "Could be", or "Might be".
+- Incorporate Question 2: The representative inquired about how much time they expect it will take to evaluate, explore, or research the solution.
+  - The prospect's expected timeframe MUST be classified and reflected as exactly one of these three standardized options:
+    "Zero to two months", "Two to three months", or "Three to six months".
+
+Paragraph 4 (Comprehensive Closing Statement):
+- A comprehensive closing statement that unifies all the preceding elements.
+- State that based on their interest and expected evaluation timeframe ("Zero to two months", "Two to three months", or "Three to six months"), a solutions specialist from TGS Tech Info will follow up to share tailored insights, provide strategic recommendations, and answer any questions.
+- Conclude by expressing gratitude for their time and wishing them a productive day ahead.
 
 RAW TRANSCRIPT (EVIDENCE):
 """
 ${rawTranscript}
 """
 
-APPROVED COLD CALLING SCRIPT & RULES:
-1. Cold Call Hook: Must position the interaction as an outbound cold call (e.g. "The reason for my call is that I recently came across your profile on LinkedIn...").
-2. Calling Company: MUST refer to the calling company as "TGS Tech Info".
-3. Prohibited Unsupported Claims: Must NOT introduce unsupported statements such as "I sent you an email", "I'm following up on my email", "You downloaded our report", "You filled out our form", "You requested information", unless the raw recording actually contains that evidence.
-4. Dynamic Value Proposition: Must replace hardcoded LMS references with the campaign's specific Asset Title ("${campaignInfo.assetTitle}") and Value Proposition ("${campaignInfo.valueProposition}").
-5. Prospect Correction: Lead data may be used to correct obvious speech-to-text spelling errors (e.g. "John from ABC Tecnology" -> "John from ABC Technology"), but NEVER manufacture spoken dialogue like "Yes I am John Smith, IT Director at ABC Tech...".
-6. Implementation Question: Check if prospect was asked if they are evaluating, exploring, or researching "${campaignInfo.assetTitle}".
-7. Prospect Response Checkpoint: Extract prospect's actual response as "YES", "NO", "UNCLEAR", or "NOT_CAPTURED". Do NOT manufacture a "YES" if not present in the raw transcript!
-8. Implementation Timeline Extraction: Options MUST be standardized as "[0–3 Months]", "[3–6 Months]", "[6–9 Months]", or "[Not Captured]". Only extract what was actually communicated.
-
-FINAL EDITED TRANSCRIPT REQUIREMENTS (STRICT):
-1. The final edited transcript MUST contain a MAXIMUM of 3–4 paragraphs (preferably 3 to 4 concise narrative paragraphs).
-   - Paragraph 1: Prospect confirmation + Agent introduction (Agent Name + TGS Tech Info) + Cold-call context (e.g., LinkedIn outreach).
-   - Paragraph 2: Campaign context + Asset Title ("${campaignInfo.assetTitle}") + Value Proposition ("${campaignInfo.valueProposition}") + purpose of call.
-   - Paragraph 3: Implementation/evaluation question + prospect's actual response + standardized Implementation Timeline in brackets (e.g. [3–6 Months] or [Not Captured]).
-   - Paragraph 4: Specialist follow-up / next step + professional closing.
-   (If content naturally fits into 3 paragraphs, use 3 paragraphs. Do NOT artificially expand).
+CLEANING RULES:
+- Remove all conversational tangents, filler words ("um", "uh", "like"), audio dropouts, and stuttering.
+- Replace or remove all negative sentences, friction, hesitation, or awkward interruptions from the raw audio so that the final narrative is smooth, relevant, positive, and professional.
 
 REQUIRED OUTPUT FORMAT:
 Return ONLY a valid JSON object matching this structure:
 {
-  "status": "success", // or "review_required" if missing key info
+  "status": "success", // or "review_required" if evaluation or timeline wasn't captured
   "modified_transcript": "Paragraph 1...\\n\\nParagraph 2...\\n\\nParagraph 3...\\n\\nParagraph 4...",
   "qualification": {
     "implementation_question_asked": true,
-    "implementation_response": "YES", // "YES" | "NO" | "UNCLEAR" | "NOT_CAPTURED"
-    "implementation_timeline": "[3–6 Months]" // "[0–3 Months]" | "[3–6 Months]" | "[6–9 Months]" | "[Not Captured]"
+    "implementation_response": "Yes", // Must be one of: "Yes" | "Probably" | "Could be" | "Might be" | "No" | "Not Captured"
+    "implementation_timeline": "Three to six months" // Must be one of: "Zero to two months" | "Two to three months" | "Three to six months" | "[Not Captured]"
   },
   "checkpoints": {
-    "prospect_identification": true,
+    "anonymous_no_personal_names": true,
     "tgs_tech_info_introduction": true,
-    "cold_call_context": true,
-    "campaign_context": true,
-    "value_proposition": true,
-    "implementation_question": true,
-    "implementation_timeline": true,
+    "cold_call_linkedin_context": true,
+    "lms_value_proposition": true,
+    "evaluation_question_asked": true,
+    "evaluation_timeline_asked": true,
     "specialist_followup": true,
-    "closing": true
+    "comprehensive_closing_statement": true
   },
   "missing_information": [],
-  "processing_notes": ["Summary of edits and validation results"]
+  "processing_notes": ["Summary of edits, negative sentence removals, and standardized question extractions"]
 }
 `;
 
@@ -105,9 +111,9 @@ Return ONLY a valid JSON object matching this structure:
     const modelsToTry = Array.from(new Set([
       requestedModel,
       'gemini-3.6-flash',
-      'gemini-2.0-flash',
-      'gemini-1.5-flash',
-      'gemini-1.5-pro'
+      'gemini-3.5-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-3-flash-preview'
     ]));
 
     let lastError = '';
@@ -145,9 +151,14 @@ Return ONLY a valid JSON object matching this structure:
           lastError = errText;
           const errLower = errText.toLowerCase();
 
+          if (response.status === 402) {
+            throw new Error(`Google AI Studio credits depleted (402). Please check your project billing or use an active key.`);
+          }
+
           if (
             errLower.includes('high demand') ||
             errLower.includes('not found') ||
+            errLower.includes('no longer available') ||
             response.status === 503 ||
             response.status === 429 ||
             response.status === 404
@@ -179,7 +190,11 @@ Return ONLY a valid JSON object matching this structure:
     const missingInfo = parsed.missing_information || [];
     const notes = parsed.processing_notes || [];
 
-    const isComplete = qualification.implementation_response === 'YES' && qualification.implementation_timeline !== '[Not Captured]';
+    const validResponses = ['Yes', 'Probably', 'Could be', 'Might be', 'YES'];
+    const isComplete = validResponses.includes(qualification.implementation_response) &&
+      qualification.implementation_timeline &&
+      qualification.implementation_timeline !== '[Not Captured]' &&
+      qualification.implementation_timeline !== 'Not Captured';
 
     return NextResponse.json({
       status: parsed.status || (isComplete ? 'success' : 'review_required'),

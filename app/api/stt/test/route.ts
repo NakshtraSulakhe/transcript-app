@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const apiKey = body.apiKey || process.env.GOOGLE_SPEECH_API_KEY || process.env.ASSEMBLYAI_API_KEY;
+    const apiKey = body.apiKey || process.env.STT_API_KEY || process.env.GOOGLE_SPEECH_API_KEY || process.env.ASSEMBLYAI_API_KEY;
     const provider = body.provider || 'GoogleCloud';
 
     if (!apiKey) {
