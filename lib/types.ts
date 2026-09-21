@@ -1,0 +1,80 @@
+export interface STTConfig {
+  provider: string; // 'GoogleCloud' | 'AssemblyAI'
+  apiKey: string;
+  gcsBucket?: string;
+  endpoint?: string;
+  model?: string;
+  language?: string;
+}
+
+export interface AIConfig {
+  provider: string; // 'Google AI Studio'
+  apiKey: string;
+  endpoint?: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+}
+
+export interface LeadInfo {
+  firstName: string;
+  lastName: string;
+  companyName: string;
+  email: string;
+  jobTitle: string;
+}
+
+export interface CampaignInfo {
+  campaignId?: string;
+  campaignName: string;
+  assetTitle: string;
+  valueProposition: string;
+}
+
+export type WorkflowStatus =
+  | 'idle'
+  | 'recording_uploaded'
+  | 'uploading'
+  | 'uploaded'
+  | 'transcribing'
+  | 'transcription_processing'
+  | 'transcription_completed'
+  | 'ai_processing'
+  | 'ai_processing_completed'
+  | 'review_required'
+  | 'error';
+
+export interface QACheckpoints {
+  prospect_identified?: boolean;
+  tgs_tech_info_introduction?: boolean;
+  cold_call_context?: boolean;
+  value_proposition_present?: boolean;
+  implementation_question_asked?: boolean;
+  implementation_response?: 'YES' | 'NO' | 'UNCLEAR' | 'NOT_CAPTURED';
+  implementation_timeline?: '[0–3 Months]' | '[3–6 Months]' | '[6–9 Months]' | '[Not Captured]';
+  timeline_captured?: boolean;
+  specialist_followup_mentioned?: boolean;
+  call_closing_present?: boolean;
+}
+
+export interface TranscriptRecord {
+  recordingPath?: string;
+  transcriptionProvider: string;
+  transcriptionStatus: WorkflowStatus;
+  rawTranscript: string;
+  
+  leadInfo: LeadInfo;
+  campaignInfo: CampaignInfo;
+  
+  aiProvider: string;
+  aiModel: string;
+  aiProcessingStatus: WorkflowStatus;
+  modifiedTranscript: string;
+  
+  implementationResponse: string;
+  implementationTimeline: string;
+  qaCheckpoints: QACheckpoints;
+  missingInformation: string[];
+  processingNotes: string;
+  processedAt?: string;
+}
