@@ -27,80 +27,81 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const targetCompany = leadInfo.companyName || 'the prospect organization';
-    const defaultAsset = campaignInfo.assetTitle || 'Learning Management System (LMS)';
-    const defaultValueProp = campaignInfo.valueProposition || 'identifying and implementing Learning Management System (LMS) solutions that streamline training delivery, learner engagement, and performance tracking, enabling organizations to enhance workforce development and achieve better learning outcomes';
+    const prospectFullName = [leadInfo.firstName, leadInfo.lastName].filter(Boolean).join(' ') || leadInfo.firstName || 'Laura McDurmont';
+    const prospectJobTitle = leadInfo.jobTitle || 'Director, Network, Voice, Cloud and Datacenter Services';
+    const prospectCompany = leadInfo.companyName || 'Energizer Holdings';
+    const prospectEmail = leadInfo.email || `${leadInfo.firstName?.toLowerCase() || 'prospect'}.${leadInfo.lastName?.toLowerCase() || 'contact'}@${(leadInfo.companyName || 'energizer').toLowerCase().replace(/[^a-z0-9]/g, '')}.com`;
 
     const prompt = `
 ROLE:
-You are an expert AI Cold Call Quality Assurance and Transcript Editing Engine.
+You are an expert AI Call Transcript Editor and Quality Assurance Engine for TGS Tech Info.
 
 OBJECTIVE:
-Transform the raw spoken audio transcript into a polished, professional, cohesive narrative transcript composed of EXACTLY 3 TO 4 PARAGRAPHS.
+Transform the raw, unedited speech-to-text call audio transcript into an EDITED, PROFESSIONALLY FORMATTED CALL TRANSCRIPT arranged into EXACTLY 4 CONVERSATIONAL PARAGRAPHS.
 
-STRICT ANONYMITY REQUIREMENT:
-- DO NOT INCLUDE ANY PERSONAL NAMES for either the prospect or the agent anywhere in the edited transcript.
-- Do NOT use names like "Alex", "John", "Sarah", or any spoken personal names.
-- Refer to the caller as "the representative", "the caller", or "the TGS Tech Info specialist".
-- Refer to the person called as "the prospect", "the contact", or "the organization's representative".
-- The calling company name MUST be referenced as "TGS Tech Info".
-- The target company name ("${targetCompany}") may be referenced.
+CRITICAL INSTRUCTION:
+This must NOT be a third-person call summary (do not write "An outbound cold call was initiated by...").
+It MUST be an EDITED, FORMATTED CONVERSATIONAL TRANSCRIPT reflecting the real spoken dialogue between the Agent and the Prospect, cleaned of filler words, noise, tangents, and negative sentences, arranged into 4 distinct conversational paragraphs following the exact flow shown below.
 
-PARAGRAPH STRUCTURE (MUST BE 3 TO 4 PARAGRAPHS):
-
-Paragraph 1 (Introduction & Cold Call Context):
-- Position the interaction as an outbound cold call from TGS Tech Info.
-- Reference that the outreach was initiated following a review of the prospect's professional profile on LinkedIn.
-- Confirm establishing contact with the organization's representative in a professional, courteous manner, without using any personal names.
-
-Paragraph 2 (Purpose of Call & LMS Value Proposition):
-- Clearly articulate the core purpose of the outreach on behalf of TGS Tech Info.
-- Introduce the Learning Management System (LMS) value proposition: explaining that TGS Tech Info helps learning and development teams with ${defaultValueProp}.
-
-Paragraph 3 (The Two Key Questions & Standardized Responses):
-- Incorporate Question 1: The representative asked whether the organization is currently evaluating, exploring, or researching a new Learning Management System (LMS) solution.
-  - The prospect's evaluation status MUST be classified and reflected as exactly one of these four standardized options:
-    "Yes", "Probably", "Could be", or "Might be".
-- Incorporate Question 2: The representative inquired about how much time they expect it will take to evaluate, explore, or research the solution.
-  - The prospect's expected timeframe MUST be classified and reflected as exactly one of these three standardized options:
-    "Zero to two months", "Two to three months", or "Three to six months".
-
-Paragraph 4 (Comprehensive Closing Statement):
-- A comprehensive closing statement that unifies all the preceding elements.
-- State that based on their interest and expected evaluation timeframe ("Zero to two months", "Two to three months", or "Three to six months"), a solutions specialist from TGS Tech Info will follow up to share tailored insights, provide strategic recommendations, and answer any questions.
-- Conclude by expressing gratitude for their time and wishing them a productive day ahead.
+LEAD REFERENCE DATA:
+- Prospect Full Name: ${prospectFullName}
+- Company: ${prospectCompany}
+- Job Title: ${prospectJobTitle}
+- Email: ${prospectEmail}
+- Calling Company: TGS Tech Info
 
 RAW TRANSCRIPT (EVIDENCE):
 """
 ${rawTranscript}
 """
 
-CLEANING RULES:
-- Remove all conversational tangents, filler words ("um", "uh", "like"), audio dropouts, and stuttering.
-- Replace or remove all negative sentences, friction, hesitation, or awkward interruptions from the raw audio so that the final narrative is smooth, relevant, positive, and professional.
+APPROVED 4-PARAGRAPH CONVERSATIONAL CALL FLOW:
+
+Paragraph 1 (Greeting, Introduction, Company & Role Confirmation):
+Good morning, how can I help you? Hi, good morning, is this ${prospectFullName}? This is. Hi, my name is [Detected Agent Name or Jason Smith]. I'm calling you from TGS Tech Info. How are you doing today? I am doing well. Great. Thanks for asking. I believe you're the ${prospectJobTitle} for ${prospectCompany}, correct? Yes, I am.
+
+Paragraph 2 (Outreach Purpose, Structured LMS Resource & Email Verification):
+Actually, I'm just reaching out quickly to inform you about the structured LMS resource. We help learning and development teams find and implement Learning Management System solutions that make it easier to deliver training, engage learners, and track progress, helping organizations improve employee learning and development. For that, I have your email, that is ${prospectEmail} is this correct? Yeah, correct.
+
+Paragraph 3 (The Two Key Evaluation & Timeframe Questions):
+Wonderful. I just want to understand, whether your organization is currently evaluating a new Learning Management System solution? [Prospect Response 1: e.g. I believe so. / I think so. / Yes. / Probably. / Could be. / Might be.] Then, how much time do you know roughly it would take for your company to evaluate or explore an LMS solution? Would it be on immediate basis or it will take time like zero to three months or three to six months? [Prospect Response 2: e.g. I would probably be six months. / I think three months would be the good time. / Zero to three months. / Three to six months.]
+
+Paragraph 4 (Follow-up & Professional Closing):
+Wonderful. Then one of our representatives will follow up with you just to answer any questions you may have around this. And it was a pleasure speaking with you. Have a great day. Bye-bye. Okay, bye.
+
+EDITING RULES:
+1. Detect the Agent's name from the raw transcript (e.g. Jason Smith, Alex, etc.). If none is found, use "Jason Smith".
+2. Match and insert the Lead Reference Data (${prospectFullName}, ${prospectJobTitle}, ${prospectCompany}, ${prospectEmail}) seamlessly into the conversational dialogue.
+3. Clean out all conversational garbage: filler words ("um", "uh", "like", "you know"), stuttering, audio dropouts, and irrelevant small talk.
+4. Replace or remove any negative sentences, objections, hesitation, or awkward interruptions from the raw audio so that the dialogue reads cleanly, naturally, and positively.
+5. In Paragraph 3, extract the prospect's actual evaluation sentiment and timeframe sentiment from the evidence.
+6. The final output must consist of EXACTLY 4 paragraphs separated by blank lines (\n\n).
 
 REQUIRED OUTPUT FORMAT:
 Return ONLY a valid JSON object matching this structure:
 {
-  "status": "success", // or "review_required" if evaluation or timeline wasn't captured
+  "status": "success", // or "review_required" if missing key info
+  "agent_name": "[Agent Name]",
+  "prospect_name": "${prospectFullName}",
   "modified_transcript": "Paragraph 1...\\n\\nParagraph 2...\\n\\nParagraph 3...\\n\\nParagraph 4...",
   "qualification": {
     "implementation_question_asked": true,
-    "implementation_response": "Yes", // Must be one of: "Yes" | "Probably" | "Could be" | "Might be" | "No" | "Not Captured"
-    "implementation_timeline": "Three to six months" // Must be one of: "Zero to two months" | "Two to three months" | "Three to six months" | "[Not Captured]"
+    "implementation_response": "I believe so", // or "Yes", "Probably", "Could be", "Might be", "I think so"
+    "implementation_timeline": "Three to six months" // or "Zero to three months", "Three to six months", "Six months"
   },
   "checkpoints": {
-    "anonymous_no_personal_names": true,
+    "prospect_identified": true,
     "tgs_tech_info_introduction": true,
-    "cold_call_linkedin_context": true,
+    "role_and_company_confirmed": true,
     "lms_value_proposition": true,
+    "email_verified": true,
     "evaluation_question_asked": true,
     "evaluation_timeline_asked": true,
     "specialist_followup": true,
-    "comprehensive_closing_statement": true
+    "call_closing_present": true
   },
   "missing_information": [],
-  "processing_notes": ["Summary of edits, negative sentence removals, and standardized question extractions"]
+  "processing_notes": ["Summary of edits and extracted details"]
 }
 `;
 
