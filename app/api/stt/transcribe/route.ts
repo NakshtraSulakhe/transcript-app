@@ -11,15 +11,19 @@ async function uploadFileToGCS(
   mimeType: string,
   apiKey: string
 ): Promise<void> {
+  let sdkErrorMessage = '';
   // Strategy 1: Try @google-cloud/storage SDK (uses GOOGLE_APPLICATION_CREDENTIALS or gcloud ADC)
   try {
     let storageOptions: any = {};
+    if (process.env.GOOGLE_CLOUD_PROJECT) {
+      storageOptions.projectId = process.env.GOOGLE_CLOUD_PROJECT;
+    }
     if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
       const credVal = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
       if (credVal.startsWith('{')) {
-        storageOptions = { credentials: JSON.parse(credVal) };
+        storageOptions.credentials = JSON.parse(credVal);
       } else {
-        storageOptions = { keyFilename: credVal };
+        storageOptions.keyFilename = credVal;
       }
     }
     const storage = new Storage(storageOptions);
@@ -32,7 +36,8 @@ async function uploadFileToGCS(
     });
     return;
   } catch (sdkErr: any) {
-    console.warn('@google-cloud/storage SDK upload failed/bypassed, trying REST API key fallback:', sdkErr?.message);
+    sdkErrorMessage = sdkErr?.message || String(sdkErr);
+    console.error('@google-cloud/storage SDK upload error:', sdkErr);
   }
 
   // Strategy 2: REST Upload fallback using API Key
@@ -51,7 +56,7 @@ async function uploadFileToGCS(
     const rawMessage = errObj.message || `HTTP ${uploadRes.status}`;
 
     throw new Error(
-      `Google Cloud Storage Upload Failed (${uploadRes.status}): ${rawMessage}. Google Cloud Storage requires Service Account credentials for object uploads. Please set GOOGLE_APPLICATION_CREDENTIALS in your .env.local file to your Service Account JSON key path (e.g. GOOGLE_APPLICATION_CREDENTIALS=C:\\path\\to\\google-credentials.json).`
+      `Google Cloud Storage Upload Failed: SDK Error: "${sdkErrorMessage || 'N/A'}". REST Error (${uploadRes.status}): "${rawMessage}". Please check bucket permissions or run: gcloud auth application-default login`
     );
   }
 }
@@ -163,12 +168,15 @@ async function transcribeWithGCSAndLongRunning(
     // Step 4: Temporary GCS File Cleanup
     try {
       let storageOptions: any = {};
+      if (process.env.GOOGLE_CLOUD_PROJECT) {
+        storageOptions.projectId = process.env.GOOGLE_CLOUD_PROJECT;
+      }
       if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
         const credVal = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
         if (credVal.startsWith('{')) {
-          storageOptions = { credentials: JSON.parse(credVal) };
+          storageOptions.credentials = JSON.parse(credVal);
         } else {
-          storageOptions = { keyFilename: credVal };
+          storageOptions.keyFilename = credVal;
         }
       }
       const storage = new Storage(storageOptions);
