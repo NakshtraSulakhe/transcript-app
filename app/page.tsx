@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { DEFAULT_CAMPAIGNS } from '@/lib/campaigns';
+import { CAMPAIGN_ASSETS, DEFAULT_CAMPAIGNS } from '@/lib/campaigns';
 import { STTConfig, AIConfig, LeadInfo, CampaignInfo, WorkflowStatus } from '@/lib/types';
 import { DEFAULT_AI_PROMPT_TEMPLATE } from '@/lib/defaultPrompt';
 
@@ -40,6 +40,8 @@ export default function Home() {
   };
 
   // Campaign State
+  const [selectedAssetId, setSelectedAssetId] = useState<string>(CAMPAIGN_ASSETS[0].id);
+  const [selectedVariantId, setSelectedVariantId] = useState<string>('1');
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>(DEFAULT_CAMPAIGNS[0].id);
   const [campaignInfo, setCampaignInfo] = useState<CampaignInfo>({
     campaignName: DEFAULT_CAMPAIGNS[0].name,
@@ -127,9 +129,51 @@ export default function Home() {
   }, []);
 
   // Update Campaign fields when selection changes
+  const handleAssetChange = (assetId: string) => {
+    setSelectedAssetId(assetId);
+    if (assetId === 'custom') {
+      setSelectedCampaignId('custom');
+      setCampaignInfo({
+        campaignName: 'Custom Campaign',
+        assetTitle: '',
+        valueProposition: ''
+      });
+    } else {
+      const asset = CAMPAIGN_ASSETS.find(a => a.id === assetId);
+      if (asset) {
+        const variant = asset.valuePropositions.find(vp => vp.id === selectedVariantId) || asset.valuePropositions[0];
+        setSelectedVariantId(variant.id);
+        setSelectedCampaignId(`${asset.id}-${variant.id}`);
+        setCampaignInfo({
+          campaignName: variant.name,
+          assetTitle: asset.assetTitle,
+          valueProposition: variant.text
+        });
+      }
+    }
+  };
+
+  const handleVariantChange = (variantId: string) => {
+    setSelectedVariantId(variantId);
+    if (selectedAssetId !== 'custom') {
+      const asset = CAMPAIGN_ASSETS.find(a => a.id === selectedAssetId);
+      if (asset) {
+        const variant = asset.valuePropositions.find(vp => vp.id === variantId) || asset.valuePropositions[0];
+        setSelectedCampaignId(`${asset.id}-${variant.id}`);
+        setCampaignInfo(prev => ({
+          ...prev,
+          campaignName: variant.name,
+          assetTitle: asset.assetTitle,
+          valueProposition: variant.text
+        }));
+      }
+    }
+  };
+
   const handleCampaignChange = (campaignId: string) => {
     setSelectedCampaignId(campaignId);
     if (campaignId === 'custom') {
+      setSelectedAssetId('custom');
       setCampaignInfo({
         campaignName: 'Custom Campaign',
         assetTitle: '',
@@ -138,6 +182,8 @@ export default function Home() {
     } else {
       const selected = DEFAULT_CAMPAIGNS.find(c => c.id === campaignId);
       if (selected) {
+        setSelectedAssetId(selected.assetId);
+        setSelectedVariantId(selected.variantId);
         setCampaignInfo({
           campaignName: selected.name,
           assetTitle: selected.assetTitle,
@@ -371,6 +417,8 @@ export default function Home() {
     alert('Edited transcript copied to clipboard!');
   };
 
+  const currentAsset = CAMPAIGN_ASSETS.find(a => a.id === selectedAssetId);
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 font-sans pb-16">
       {/* Top Header */}
@@ -519,26 +567,71 @@ export default function Home() {
 
             {/* Step B: Dynamic Campaign Configuration */}
             <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-6 shadow-xl">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 text-xs font-bold border border-indigo-500/30">2</span>
-                <h2 className="text-base font-semibold text-slate-200">Dynamic Campaign Information</h2>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 text-xs font-bold border border-indigo-500/30">2</span>
+                  <h2 className="text-base font-semibold text-slate-200">Dynamic Campaign Information</h2>
+                </div>
+                <span className="text-[11px] text-slate-400 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-md">
+                  4 Assets • 2 Value Props Each
+                </span>
               </div>
 
-              <div className="space-y-3 text-xs">
+              <div className="space-y-4 text-xs">
+                {/* 1. Asset Dropdown */}
                 <div>
-                  <label className="block text-slate-400 font-medium mb-1">Campaign Name</label>
+                  <label className="block text-slate-400 font-medium mb-1">Select Asset / Solution</label>
                   <select
-                    value={selectedCampaignId}
-                    onChange={(e) => handleCampaignChange(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                    value={selectedAssetId}
+                    onChange={(e) => handleAssetChange(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 font-medium cursor-pointer"
                   >
-                    {DEFAULT_CAMPAIGNS.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
+                    {CAMPAIGN_ASSETS.map((asset, idx) => (
+                      <option key={asset.id} value={asset.id}>
+                        {idx + 1}. {asset.name}
+                      </option>
                     ))}
                     <option value="custom">+ Custom Campaign</option>
                   </select>
                 </div>
 
+                {/* 2. Value Proposition Dropdown & Quick Selector */}
+                {selectedAssetId !== 'custom' && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-slate-400 font-medium">Value Proposition Variant</label>
+                      <div className="inline-flex rounded-md bg-slate-900 p-0.5 border border-slate-800">
+                        {currentAsset?.valuePropositions.map((vp) => (
+                          <button
+                            key={vp.id}
+                            type="button"
+                            onClick={() => handleVariantChange(vp.id)}
+                            className={`px-2.5 py-1 rounded text-[11px] font-medium transition-all ${
+                              selectedVariantId === vp.id
+                                ? 'bg-indigo-600 text-white shadow-sm'
+                                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                            }`}
+                          >
+                            Value Prop {vp.id}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <select
+                      value={selectedVariantId}
+                      onChange={(e) => handleVariantChange(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 font-medium cursor-pointer"
+                    >
+                      {currentAsset?.valuePropositions.map((vp) => (
+                        <option key={vp.id} value={vp.id}>
+                          {vp.name} (Value Prop {vp.id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* 3. Asset Title (Auto-Populated) */}
                 <div>
                   <label className="block text-slate-400 font-medium mb-1">Asset Title (Auto-Populated)</label>
                   <input
@@ -549,13 +642,18 @@ export default function Home() {
                   />
                 </div>
 
+                {/* 4. Value Proposition (Auto-Populated & Editable) */}
                 <div>
-                  <label className="block text-slate-400 font-medium mb-1">Value Proposition (Auto-Populated)</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-slate-400 font-medium">Value Proposition (Auto-Populated)</label>
+                    <span className="text-[10px] text-slate-500">Auto-filled • Fully editable</span>
+                  </div>
                   <textarea
-                    rows={3}
+                    rows={4}
                     value={campaignInfo.valueProposition}
                     onChange={(e) => setCampaignInfo({ ...campaignInfo, valueProposition: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 leading-relaxed"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 leading-relaxed text-xs"
+                    placeholder="Enter or customize value proposition..."
                   />
                 </div>
               </div>
