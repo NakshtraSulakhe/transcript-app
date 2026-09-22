@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { LeadInfo, CampaignInfo, AIConfig } from '@/lib/types';
+import { DEFAULT_AI_PROMPT_TEMPLATE } from '@/lib/defaultPrompt';
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,78 +33,31 @@ export async function POST(request: NextRequest) {
     const prospectCompany = leadInfo.companyName || 'Energizer Holdings';
     const prospectEmail = leadInfo.email || `${leadInfo.firstName?.toLowerCase() || 'prospect'}.${leadInfo.lastName?.toLowerCase() || 'contact'}@${(leadInfo.companyName || 'energizer').toLowerCase().replace(/[^a-z0-9]/g, '')}.com`;
 
-    const prompt = `
-ROLE:
-You are an expert AI Call Transcript Editor and Quality Assurance Engine for TGS Tech Info.
+    // Support user-provided custom instructions/prompt from UI, otherwise use 29-Point Engine Specification
+    const userPromptInput: string = (body.customPrompt || aiConfig.customPrompt || '').trim();
+    const baseTemplate = userPromptInput || DEFAULT_AI_PROMPT_TEMPLATE;
 
-OBJECTIVE:
-Transform the raw, unedited speech-to-text call audio transcript into an EDITED, PROFESSIONALLY FORMATTED CALL TRANSCRIPT arranged into EXACTLY 4 CONVERSATIONAL PARAGRAPHS.
+    let resolvedPrompt = baseTemplate
+      .replace(/\{\{PROSPECT_FULL_NAME\}\}/g, prospectFullName)
+      .replace(/\{\{PROSPECT_COMPANY\}\}/g, prospectCompany)
+      .replace(/\{\{PROSPECT_JOB_TITLE\}\}/g, prospectJobTitle)
+      .replace(/\{\{PROSPECT_EMAIL\}\}/g, prospectEmail)
+      .replace(/\{\{CAMPAIGN_NAME\}\}/g, campaignInfo.campaignName || 'B2B Outreach')
+      .replace(/\{\{ASSET_TITLE\}\}/g, campaignInfo.assetTitle || 'Solution')
+      .replace(/\{\{VALUE_PROPOSITION\}\}/g, campaignInfo.valueProposition || 'Helping organizations optimize performance.')
+      .replace(/\{\{RAW_TRANSCRIPT\}\}/g, rawTranscript);
 
-CRITICAL INSTRUCTION:
-This must NOT be a third-person call summary (do not write "An outbound cold call was initiated by...").
-It MUST be an EDITED, FORMATTED CONVERSATIONAL TRANSCRIPT reflecting the real spoken dialogue between the Agent and the Prospect, cleaned of filler words, noise, tangents, and negative sentences, arranged into 4 distinct conversational paragraphs following the exact flow shown below.
+    // If user provided custom prompt without raw transcript placeholders, append the context automatically
+    if (!resolvedPrompt.includes(rawTranscript) && !userPromptInput.includes('{{RAW_TRANSCRIPT}}')) {
+      resolvedPrompt += `\n\nLEAD REFERENCE DATA:\n- Prospect Full Name: ${prospectFullName}\n- Company Name: ${prospectCompany}\n- Job Title: ${prospectJobTitle}\n- Verified Email: ${prospectEmail}\n- Calling Company: TGS Tech Info\n\nRAW TRANSCRIPT (SOURCE OF TRUTH):\n"""\n${rawTranscript}\n"""`;
+    }
 
-LEAD REFERENCE DATA:
-- Prospect Full Name: ${prospectFullName}
-- Company: ${prospectCompany}
-- Job Title: ${prospectJobTitle}
-- Email: ${prospectEmail}
-- Calling Company: TGS Tech Info
+    // Ensure required JSON contract is preserved so UI tabs and checkpoints work seamlessly
+    if (!resolvedPrompt.includes('REQUIRED OUTPUT JSON FORMAT') && !resolvedPrompt.includes('modified_transcript')) {
+      resolvedPrompt += `\n\nREQUIRED OUTPUT JSON FORMAT:\nReturn ONLY a valid JSON object matching this structure:\n{\n  "status": "success",\n  "agent_name": "[Detected Agent Name or Jason Smith]",\n  "prospect_name": "${prospectFullName}",\n  "modified_transcript": "Paragraph 1...\\n\\nParagraph 2...\\n\\nParagraph 3...",\n  "qualification": {\n    "implementation_question_asked": true,\n    "implementation_response": "[Prospect's actual confirmed evaluation answer]",\n    "implementation_timeline": "[Prospect's actual confirmed timeline in months]"\n  },\n  "checkpoints": {\n    "prospect_identified": true,\n    "tgs_tech_info_introduction": true,\n    "role_and_company_confirmed": true,\n    "lms_value_proposition": true,\n    "email_verified": true,\n    "no_send_or_share_mentions": true,\n    "evaluation_question_asked": true,\n    "evaluation_timeline_asked": true,\n    "specialist_followup": true,\n    "call_closing_present": true\n  },\n  "missing_information": [],\n  "processing_notes": "Brief summary of edits, confirmed details, and timeline captured in months"\n}`;
+    }
 
-RAW TRANSCRIPT (EVIDENCE):
-"""
-${rawTranscript}
-"""
-
-APPROVED 4-PARAGRAPH CONVERSATIONAL CALL FLOW:
-
-Paragraph 1 (Greeting, Introduction, Company & Role Confirmation):
-Good morning, how can I help you? Hi, good morning, is this ${prospectFullName}? This is. Hi, my name is [Detected Agent Name or Jason Smith]. I'm calling you from TGS Tech Info. How are you doing today? I am doing well. Great. Thanks for asking. I believe you're the ${prospectJobTitle} for ${prospectCompany}, correct? Yes, I am.
-
-Paragraph 2 (Outreach Purpose, Structured LMS Resource & Email Verification):
-Actually, I'm just reaching out quickly to inform you about the structured LMS resource. We help learning and development teams find and implement Learning Management System solutions that make it easier to deliver training, engage learners, and track progress, helping organizations improve employee learning and development. For that, I have your email, that is ${prospectEmail} is this correct? Yeah, correct.
-
-Paragraph 3 (The Two Key Evaluation & Timeframe Questions):
-Wonderful. I just want to understand, whether your organization is currently evaluating a new Learning Management System solution? [Prospect Response 1: e.g. I believe so. / I think so. / Yes. / Probably. / Could be. / Might be.] Then, how much time do you know roughly it would take for your company to evaluate or explore an LMS solution? Would it be on immediate basis or it will take time like zero to three months or three to six months? [Prospect Response 2: e.g. I would probably be six months. / I think three months would be the good time. / Zero to three months. / Three to six months.]
-
-Paragraph 4 (Follow-up & Professional Closing):
-Wonderful. Then one of our representatives will follow up with you just to answer any questions you may have around this. And it was a pleasure speaking with you. Have a great day. Bye-bye. Okay, bye.
-
-EDITING RULES:
-1. Detect the Agent's name from the raw transcript (e.g. Jason Smith, Alex, etc.). If none is found, use "Jason Smith".
-2. Match and insert the Lead Reference Data (${prospectFullName}, ${prospectJobTitle}, ${prospectCompany}, ${prospectEmail}) seamlessly into the conversational dialogue.
-3. Clean out all conversational garbage: filler words ("um", "uh", "like", "you know"), stuttering, audio dropouts, and irrelevant small talk.
-4. Replace or remove any negative sentences, objections, hesitation, or awkward interruptions from the raw audio so that the dialogue reads cleanly, naturally, and positively.
-5. In Paragraph 3, extract the prospect's actual evaluation sentiment and timeframe sentiment from the evidence.
-6. The final output must consist of EXACTLY 4 paragraphs separated by blank lines (\n\n).
-
-REQUIRED OUTPUT FORMAT:
-Return ONLY a valid JSON object matching this structure:
-{
-  "status": "success", // or "review_required" if missing key info
-  "agent_name": "[Agent Name]",
-  "prospect_name": "${prospectFullName}",
-  "modified_transcript": "Paragraph 1...\\n\\nParagraph 2...\\n\\nParagraph 3...\\n\\nParagraph 4...",
-  "qualification": {
-    "implementation_question_asked": true,
-    "implementation_response": "I believe so", // or "Yes", "Probably", "Could be", "Might be", "I think so"
-    "implementation_timeline": "Three to six months" // or "Zero to three months", "Three to six months", "Six months"
-  },
-  "checkpoints": {
-    "prospect_identified": true,
-    "tgs_tech_info_introduction": true,
-    "role_and_company_confirmed": true,
-    "lms_value_proposition": true,
-    "email_verified": true,
-    "evaluation_question_asked": true,
-    "evaluation_timeline_asked": true,
-    "specialist_followup": true,
-    "call_closing_present": true
-  },
-  "missing_information": [],
-  "processing_notes": ["Summary of edits and extracted details"]
-}
-`;
+    const prompt = resolvedPrompt;
 
     const requestedModel = aiConfig.model || 'gemini-3.6-flash';
     const temperature = aiConfig.temperature ?? 0.2;
@@ -185,17 +139,45 @@ Return ONLY a valid JSON object matching this structure:
       );
     }
 
-    const modifiedTranscript = parsed.modified_transcript || '';
+    let modifiedTranscript = parsed.modified_transcript || '';
+    
+    // Safety Net: Ensure all references to sending/sharing guides, reports, collateral, or emails are eliminated
+    modifiedTranscript = modifiedTranscript
+      .replace(/(can\s+I|I\s+will|I'll|we\s+will|we'll|let\s+me|I'd\s+like\s+to|I\s+wanted\s+to|wanted\s+to|reaching\s+out\s+to)?\s*(send|sending|share|sharing|email)\s+(you\s+)?(a\s+|the\s+|any\s+|our\s+)?(guide|report|collateral|whitepaper|overview|material|details)?\s*(via|over|through|by|to)?\s*(your\s+)?emails?/gi, 'inform you about our structured LMS resource')
+      .replace(/(send|sending|share|sharing|email)\s+(you\s+)?(this|that|it|details|information|the\s+information)\s*(over|via|through|to\s+your)?\s*emails?/gi, 'connect with you regarding this')
+      .replace(/(send|sending|share|sharing)\s+(you\s+)?(a\s+|the\s+|any\s+|our\s+)?(guide|report|collateral|whitepaper)\b/gi, 'discuss our structured LMS resource')
+      .replace(/(is\s+this\s+the\s+best\s+email\s+to\s+send|where\s+should\s+I\s+send|can\s+I\s+email\s+you)\b/gi, 'is this the correct email address for you')
+      .replace(/\b(collaterals?|whitepapers?)\b/gi, 'LMS resources')
+      .replace(/(send|share)\s+(you\s+)?(an?\s+)?emails?/gi, 'connect with you')
+      .replace(/(to\s+send|to\s+share)\s+(via|over|through)\s+email/gi, 'for our records');
+
     const qualification = parsed.qualification || {};
     const checkpoints = parsed.checkpoints || {};
     const missingInfo = parsed.missing_information || [];
-    const notes = parsed.processing_notes || [];
-
-    const validResponses = ['Yes', 'Probably', 'Could be', 'Might be', 'YES'];
-    const isComplete = validResponses.includes(qualification.implementation_response) &&
-      qualification.implementation_timeline &&
-      qualification.implementation_timeline !== '[Not Captured]' &&
-      qualification.implementation_timeline !== 'Not Captured';
+    const notes = parsed.processing_notes || '';
+    
+    const validAffirmations = [
+      'yes',
+      'probably',
+      'could be',
+      'might be',
+      'i believe so',
+      'believe so',
+      'i think so',
+      'think so',
+      'ok',
+      'okay',
+      'sure',
+      'yeah',
+      'yep',
+      'correct',
+      'right'
+    ];
+    const rawResp = (qualification.implementation_response || '').toLowerCase().trim();
+    const isAffirmative = validAffirmations.some(v => rawResp.includes(v));
+    const isTimelineCaptured = qualification.implementation_timeline &&
+      !qualification.implementation_timeline.includes('Not Captured');
+    const isComplete = isAffirmative && isTimelineCaptured;
 
     return NextResponse.json({
       status: parsed.status || (isComplete ? 'success' : 'review_required'),

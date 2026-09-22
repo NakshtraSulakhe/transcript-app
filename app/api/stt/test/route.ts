@@ -3,14 +3,45 @@ import { NextRequest, NextResponse } from 'next/server';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const apiKey = body.apiKey || process.env.STT_API_KEY || process.env.GOOGLE_SPEECH_API_KEY || process.env.ASSEMBLYAI_API_KEY;
+    const apiKey = body.apiKey;
     const provider = body.provider || 'GoogleCloud';
+    const isGemini = provider === 'Gemini' || provider === 'GoogleGemini';
+    const effectiveKey = isGemini
+      ? (apiKey || process.env.GEMINI_API_KEY)
+      : (apiKey || process.env.STT_API_KEY || process.env.GOOGLE_SPEECH_API_KEY || process.env.ASSEMBLYAI_API_KEY);
 
-    if (!apiKey) {
+    if (!effectiveKey) {
       return NextResponse.json(
         { success: false, error: 'API key is missing. Please enter your API key in Transcription API settings.' },
         { status: 400 }
       );
+    }
+
+    if (isGemini) {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${effectiveKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: 'Respond with OK.' }] }]
+          })
+        }
+      );
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        return NextResponse.json(
+          { success: false, error: `Gemini STT Connection Failed: ${errorText}` },
+          { status: res.status }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: 'Connected Successfully to Gemini High-Precision Multimodal STT Engine',
+        provider: 'Gemini Multimodal STT'
+      });
     }
 
     if (provider === 'GoogleCloud') {

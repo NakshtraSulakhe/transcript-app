@@ -14,6 +14,7 @@ export interface AIConfig {
   model: string;
   temperature: number;
   maxTokens: number;
+  customPrompt?: string;
 }
 
 export interface LeadInfo {

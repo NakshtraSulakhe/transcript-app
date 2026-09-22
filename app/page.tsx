@@ -3,16 +3,41 @@
 import { useState, useEffect } from 'react';
 import { DEFAULT_CAMPAIGNS } from '@/lib/campaigns';
 import { STTConfig, AIConfig, LeadInfo, CampaignInfo, WorkflowStatus } from '@/lib/types';
+import { DEFAULT_AI_PROMPT_TEMPLATE } from '@/lib/defaultPrompt';
+
+const SAMPLE_PROSPECTS = {
+  laura: {
+    leadInfo: {
+      firstName: 'Laura',
+      lastName: 'McDurmont',
+      companyName: 'Energizer Holdings',
+      email: 'laura.mcdurmont@energizer.com',
+      jobTitle: 'Director, Network, Voice, Cloud and Datacenter Services'
+    },
+    raw: `Good morning, how can I help you? Hi, good morning, is this Laura McDurmont? This is. Hi, my name is Jason Smith. I'm calling you from TGS Tech Info. How are you doing today? I am doing well. Great. Thanks for asking. I believe you're the Director, Network, Voice, Cloud and Datacenter Services for Energizer Holdings, correct? Yes, I am. Perfect. Actually, I'm just reaching out quickly to inform you about the structured LMS resource. We help learning and development teams find and implement Learning Management System solutions that make it easier to deliver training, engage learners, and track progress, helping organizations improve employee learning and development. For that, I have your email, that is laura.mcdurmont@energizer.com is this correct? Yeah, correct. Wonderful. I just want to understand, whether your organization is currently evaluating a new Learning Management System solution? I believe so. Perfect. Then, how much time do you know roughly it would take for your company to evaluate or explore an LMS solution? Would it be on immediate basis or it will take time like one to two months, two to three months or three to six months? I would probably be three to six months. Wonderful. Then one of our representatives will follow up with you just to answer any questions you may have around this. And it was a pleasure speaking with you. Have a great day. Bye-bye. Okay, bye.`
+  },
+  steven: {
+    leadInfo: {
+      firstName: 'Steven',
+      lastName: 'Mann',
+      companyName: 'Connecticut Childrens',
+      email: 'smann02@connecticutchildrens.org',
+      jobTitle: 'IT Infrastructure Technology Director'
+    },
+    raw: `Hello. this is Steven. Hi Steven, this is Jason Smith. I'm calling you from TGS Tech Info. How are you doing today? I am good. Great to hear that. I believe you're the IT Infrastructure Technology Director for Connecticut Childrens, correct? Yes, I am. Perfect. Actually, I'm just reaching out to inform you about the structured LMS resource. We help learning and development teams find and implement Learning Management System solutions that make it easier to deliver training, engage learners, and track progress, helping organizations improve employee learning and development. For that, I have your email, that is smann02@connecticutchildrens.org, Is this correct? Yeah, correct. Perfect. I just want to understand, whether your organization is currently evaluating a new Learning Management System solution? I think so, yes. Great. Then, how much time do you know roughly it would take for your company to evaluate or explore an LMS solution? Would it be on immediate basis or it will take time like one to two months, two to three months or three to six months? I think two to three months would be the good time. Wonderful. Then one of our representatives will follow up with you just to answer any questions you may have around this. Have a great day. Bye-bye. Okay, bye.`
+  }
+};
 
 export default function Home() {
   // Lead Information State
-  const [leadInfo, setLeadInfo] = useState<LeadInfo>({
-    firstName: 'John',
-    lastName: 'Smith',
-    companyName: 'ABC Technologies',
-    email: 'john.smith@abctech.com',
-    jobTitle: 'IT Director'
-  });
+  const [leadInfo, setLeadInfo] = useState<LeadInfo>(SAMPLE_PROSPECTS.laura.leadInfo);
+
+  const handleLoadSample = (key: 'laura' | 'steven') => {
+    const sample = SAMPLE_PROSPECTS[key];
+    setLeadInfo(sample.leadInfo);
+    setPastedRawTranscript(sample.raw);
+    setRawTranscript(sample.raw);
+  };
 
   // Campaign State
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>(DEFAULT_CAMPAIGNS[0].id);
@@ -37,6 +62,11 @@ export default function Home() {
     temperature: 0.2,
     maxTokens: 2048
   });
+
+  // Custom AI Prompt / Instructions State (Trae AI Style Custom Rules)
+  const [customPrompt, setCustomPrompt] = useState<string>('');
+  const [showPromptEditor, setShowPromptEditor] = useState<boolean>(false);
+  const [promptSavedAlert, setPromptSavedAlert] = useState<boolean>(false);
 
   // Settings Modal State
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -70,13 +100,14 @@ export default function Home() {
     processingNotes?: string;
   } | null>(null);
 
-  // Load saved API configs on mount
+  // Load saved API configs & prompt on mount
   useEffect(() => {
     const savedSttBucket = localStorage.getItem('gcs_bucket_name');
     const savedSttKey = localStorage.getItem('stt_api_key');
     const savedSttProvider = localStorage.getItem('stt_provider');
     const savedAiKey = localStorage.getItem('ai_api_key');
     const savedAiModel = localStorage.getItem('ai_model');
+    const savedPrompt = localStorage.getItem('custom_ai_prompt');
 
     const validModel = (savedAiModel && !savedAiModel.includes('2.0') && !savedAiModel.includes('1.5'))
       ? savedAiModel 
@@ -87,6 +118,11 @@ export default function Home() {
     }
     if (savedAiKey || savedAiModel) {
       setAiConfig(prev => ({ ...prev, apiKey: savedAiKey || '', model: validModel }));
+    }
+    if (savedPrompt !== null && savedPrompt.trim()) {
+      setCustomPrompt(savedPrompt);
+    } else {
+      setCustomPrompt(DEFAULT_AI_PROMPT_TEMPLATE);
     }
   }, []);
 
@@ -159,6 +195,26 @@ export default function Home() {
     }
   };
 
+  // Prompt Editor Actions
+  const handleSavePrompt = () => {
+    localStorage.setItem('custom_ai_prompt', customPrompt);
+    setPromptSavedAlert(true);
+    setTimeout(() => setPromptSavedAlert(false), 2500);
+  };
+
+  const handleResetPromptToDefault = () => {
+    if (confirm('Reset prompt instructions to the standard 29-Point Engine Specification?')) {
+      setCustomPrompt(DEFAULT_AI_PROMPT_TEMPLATE);
+      localStorage.setItem('custom_ai_prompt', DEFAULT_AI_PROMPT_TEMPLATE);
+      setPromptSavedAlert(true);
+      setTimeout(() => setPromptSavedAlert(false), 2500);
+    }
+  };
+
+  const handleInsertTag = (tag: string) => {
+    setCustomPrompt(prev => prev + ' ' + tag);
+  };
+
   // Save Configurations
   const handleSaveSettings = () => {
     if (sttConfig.apiKey) localStorage.setItem('stt_api_key', sttConfig.apiKey);
@@ -166,6 +222,7 @@ export default function Home() {
     localStorage.setItem('stt_provider', sttConfig.provider);
     if (aiConfig.apiKey) localStorage.setItem('ai_api_key', aiConfig.apiKey);
     localStorage.setItem('ai_model', aiConfig.model);
+    if (customPrompt) localStorage.setItem('custom_ai_prompt', customPrompt);
     setShowSettingsModal(false);
   };
 
@@ -224,7 +281,8 @@ export default function Home() {
           rawTranscript: targetRaw,
           leadInfo,
           campaignInfo,
-          aiConfig
+          aiConfig,
+          customPrompt: customPrompt.trim()
         })
       });
 
@@ -373,7 +431,7 @@ export default function Home() {
             <span className="text-slate-600">→</span>
             <div className="flex items-center gap-1.5">
               <span className={`w-2 h-2 rounded-full ${modifiedTranscript ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
-              <span className="text-slate-300">API 2 (AI Edited 3–4 Paragraphs)</span>
+              <span className="text-slate-300">API 2 (AI Edited 4-Paragraph Transcript)</span>
             </div>
           </div>
         </div>
@@ -383,9 +441,29 @@ export default function Home() {
           <div className="lg:col-span-5 space-y-6">
             {/* Step A: Lead Reference Data */}
             <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-6 shadow-xl">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-500/20 text-blue-400 text-xs font-bold border border-blue-500/30">1</span>
-                <h2 className="text-base font-semibold text-slate-200">Lead Reference Information</h2>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-500/20 text-blue-400 text-xs font-bold border border-blue-500/30">1</span>
+                  <h2 className="text-base font-semibold text-slate-200">Lead Reference Information</h2>
+                </div>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleLoadSample('laura')}
+                    className="text-[10px] font-medium px-2 py-0.5 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 transition"
+                    title="Load Example 1: Laura McDurmont (Energizer Holdings)"
+                  >
+                    Ex 1: Laura
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleLoadSample('steven')}
+                    className="text-[10px] font-medium px-2 py-0.5 rounded bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition"
+                    title="Load Example 2: Steven (Connecticut Childrens)"
+                  >
+                    Ex 2: Steven
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 text-xs">
@@ -481,6 +559,147 @@ export default function Home() {
                   />
                 </div>
               </div>
+            </div>
+
+            {/* Trae AI Style: AI Prompt & Instructions Editor */}
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 text-xs font-bold border border-amber-500/30">
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                    </svg>
+                  </span>
+                  <div>
+                    <h2 className="text-base font-semibold text-slate-200">AI Prompt &amp; Instructions</h2>
+                    <p className="text-[11px] text-slate-400">Trae AI style dynamic rules (no hardcoded logic)</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {customPrompt.trim() !== DEFAULT_AI_PROMPT_TEMPLATE.trim() ? (
+                    <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                      Custom Prompt Active
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                      29-Point Engine Active
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowPromptEditor(!showPromptEditor)}
+                    className="px-2.5 py-1 text-xs bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-700 transition flex items-center gap-1.5"
+                  >
+                    {showPromptEditor ? 'Collapse' : 'Expand Editor'}
+                    <svg className={`w-3.5 h-3.5 transition-transform ${showPromptEditor ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* Collapsed summary preview */}
+              {!showPromptEditor && (
+                <div 
+                  onClick={() => setShowPromptEditor(true)}
+                  className="bg-slate-900/60 border border-slate-800/80 hover:border-slate-700 rounded-lg p-3 cursor-pointer text-xs text-slate-400 font-mono line-clamp-2 transition"
+                >
+                  {customPrompt.slice(0, 180)}...
+                  <span className="text-indigo-400 font-sans block mt-1 hover:underline text-[11px]">Click to view/edit instructions &amp; dynamic variables &rarr;</span>
+                </div>
+              )}
+
+              {/* Full Editor when expanded */}
+              {showPromptEditor && (
+                <div className="space-y-3 pt-2">
+                  <div className="flex flex-wrap items-center gap-1.5 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800 text-xs">
+                    <span className="text-[11px] font-semibold text-slate-400 mr-1 flex items-center gap-1">
+                      <svg className="w-3 h-3 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                      </svg>
+                      Insert Variable:
+                    </span>
+                    {[
+                      { label: 'Prospect Name', tag: '{{PROSPECT_FULL_NAME}}' },
+                      { label: 'Company', tag: '{{PROSPECT_COMPANY}}' },
+                      { label: 'Job Title', tag: '{{PROSPECT_JOB_TITLE}}' },
+                      { label: 'Email', tag: '{{PROSPECT_EMAIL}}' },
+                      { label: 'Asset Title', tag: '{{ASSET_TITLE}}' },
+                      { label: 'Value Prop', tag: '{{VALUE_PROPOSITION}}' },
+                      { label: 'Raw Transcript', tag: '{{RAW_TRANSCRIPT}}' }
+                    ].map(item => (
+                      <button
+                        key={item.tag}
+                        type="button"
+                        onClick={() => handleInsertTag(item.tag)}
+                        title={`Insert ${item.tag}`}
+                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-indigo-950/80 hover:border-indigo-500/50 border border-slate-700 text-[11px] text-indigo-300 font-mono transition"
+                      >
+                        +{item.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="relative">
+                    <textarea
+                      rows={14}
+                      value={customPrompt}
+                      onChange={(e) => setCustomPrompt(e.target.value)}
+                      placeholder="Enter custom prompt instructions for the AI editing engine..."
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500 leading-relaxed shadow-inner"
+                    />
+                    <div className="flex justify-between items-center text-[11px] text-slate-500 px-1 mt-1">
+                      <span>{customPrompt.length.toLocaleString()} characters ({customPrompt.split(/\s+/).filter(Boolean).length.toLocaleString()} words)</span>
+                      <span>Trae AI Dynamic Prompt Engine</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleResetPromptToDefault}
+                        className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-700 text-xs font-medium transition"
+                      >
+                        Reset to 29-Point Engine
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm('Clear prompt instructions? You can write completely custom rules from scratch.')) {
+                            setCustomPrompt('');
+                          }
+                        }}
+                        className="px-3 py-1.5 bg-slate-900 hover:bg-rose-950/40 text-slate-400 hover:text-rose-300 rounded-lg border border-slate-800 hover:border-rose-800/60 text-xs font-medium transition"
+                      >
+                        Clear
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {promptSavedAlert && (
+                        <span className="text-xs text-emerald-400 font-medium flex items-center gap-1 animate-pulse">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          Prompt Saved!
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleSavePrompt}
+                        className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow transition flex items-center gap-1.5"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                        </svg>
+                        Save Prompt
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Step C: Decoupled API Execution Controls */}
@@ -580,7 +799,7 @@ export default function Home() {
                     }`}
                   >
                     <span>Edited Transcript (API 2)</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/30 font-mono">3–4 Paragraphs</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/30 font-mono">4 Paragraphs</span>
                   </button>
 
                   <button
@@ -613,7 +832,7 @@ export default function Home() {
                     <div className="flex-1 flex flex-col space-y-4">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-slate-400">
-                          Standardized Call Summary (Anonymous 3–4 Paragraphs)
+                          Edited Conversational Transcript (4 Continuous Dialogue Paragraphs)
                         </span>
                         <div className="flex gap-2">
                           <button
@@ -634,8 +853,8 @@ export default function Home() {
                       <textarea
                         value={editedModifiedTranscript}
                         onChange={(e) => setEditedModifiedTranscript(e.target.value)}
-                        className="w-full flex-1 min-h-[420px] bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-200 text-sm leading-relaxed font-sans focus:outline-none focus:border-indigo-500 resize-y"
-                        placeholder="Click '2. AI Edit & QA (API 2)' to generate the anonymous 3–4 paragraph call transcript..."
+                        className="w-full flex-1 min-h-[420px] bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-200 text-sm leading-relaxed font-sans focus:outline-none focus:border-indigo-500 resize-y whitespace-pre-wrap"
+                        placeholder="Click '2. AI Edit & QA (API 2)' to generate the 4-paragraph edited conversational transcript..."
                       />
                     </div>
                   )}
@@ -646,24 +865,26 @@ export default function Home() {
                       {qaData ? (
                         <>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <Checkcard label="Anonymous Format (No Names)" status={qaData.checkpoints?.anonymous_no_personal_names ?? true} />
+                            <Checkcard label="Prospect &amp; Agent Identified" status={qaData.checkpoints?.prospect_identified ?? true} />
                             <Checkcard label="TGS Tech Info Introduction" status={qaData.checkpoints?.tgs_tech_info_introduction} />
-                            <Checkcard label="Cold Call &amp; LinkedIn Context" status={qaData.checkpoints?.cold_call_linkedin_context ?? qaData.checkpoints?.cold_call_context} />
-                            <Checkcard label="LMS Value Proposition" status={qaData.checkpoints?.lms_value_proposition ?? qaData.checkpoints?.value_proposition} />
-                            <Checkcard label="Q1: Evaluation Inquired" status={qaData.checkpoints?.evaluation_question_asked ?? qaData.checkpoints?.implementation_question} />
+                            <Checkcard label="Role &amp; Company Confirmed" status={qaData.checkpoints?.role_and_company_confirmed} />
+                            <Checkcard label="LMS Value Proposition" status={qaData.checkpoints?.lms_value_proposition} />
+                            <Checkcard label="Email Address Verified" status={qaData.checkpoints?.email_verified} />
+                            <Checkcard label="Q1: Evaluation Inquired" status={qaData.checkpoints?.evaluation_question_asked} />
                             <Checkcard
-                              label="Q1 Response (Yes / Probably / Could be / Might be)"
+                              label="Q1 Response (Yes / Probably / Could be / Might be / I believe so)"
                               textValue={qaData.qualification?.implementation_response || 'Not Captured'}
-                              status={['Yes', 'Probably', 'Could be', 'Might be', 'YES'].includes(qaData.qualification?.implementation_response || '')}
+                              status={Boolean(qaData.qualification?.implementation_response && !qaData.qualification?.implementation_response.includes('Not Captured'))}
                             />
-                            <Checkcard label="Q2: Expected Timeline Inquired" status={qaData.checkpoints?.evaluation_timeline_asked ?? qaData.checkpoints?.implementation_timeline} />
+                            <Checkcard label="Q2: Timeline Inquired" status={qaData.checkpoints?.evaluation_timeline_asked} />
                             <Checkcard
-                              label="Q2 Timeline (0-2m / 2-3m / 3-6m)"
+                              label="Q2 Timeline (0-3m / 3-6m / 6m / etc.)"
                               textValue={qaData.qualification?.implementation_timeline || '[Not Captured]'}
-                              status={qaData.qualification?.implementation_timeline !== '[Not Captured]' && qaData.qualification?.implementation_timeline !== 'Not Captured'}
+                              status={Boolean(qaData.qualification?.implementation_timeline && !qaData.qualification?.implementation_timeline.includes('Not Captured'))}
                             />
                             <Checkcard label="Specialist Follow-up Mentioned" status={qaData.checkpoints?.specialist_followup} />
-                            <Checkcard label="Comprehensive Closing Statement" status={qaData.checkpoints?.comprehensive_closing_statement ?? qaData.checkpoints?.closing} />
+                            <Checkcard label="Zero Send/Share Mentions (No Email Collateral)" status={qaData.checkpoints?.no_send_or_share_mentions ?? true} />
+                            <Checkcard label="Professional Call Closing" status={qaData.checkpoints?.call_closing_present} />
                           </div>
 
                           {qaData.missingInformation && qaData.missingInformation.length > 0 && (
@@ -728,7 +949,7 @@ export default function Home() {
       {/* Dual API Settings Modal */}
       {showSettingsModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl p-6 shadow-2xl space-y-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-6">
             <div className="flex justify-between items-center border-b border-slate-800 pb-4">
               <h3 className="text-base font-bold text-slate-100">Settings → API Configuration</h3>
               <button
@@ -773,7 +994,8 @@ export default function Home() {
                     onChange={(e) => setSttConfig({ ...sttConfig, provider: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
                   >
-                    <option value="GoogleCloud">Google Cloud Speech-to-Text (Google Console API Key)</option>
+                    <option value="Gemini">Gemini Multimodal STT (Recommended — 100% Verbatim Accuracy &amp; Diarization)</option>
+                    <option value="GoogleCloud">Google Cloud Speech-to-Text (Telephony Enhanced)</option>
                     <option value="AssemblyAI">AssemblyAI</option>
                   </select>
                 </div>
@@ -785,8 +1007,17 @@ export default function Home() {
                     value={sttConfig.apiKey}
                     onChange={(e) => setSttConfig({ ...sttConfig, apiKey: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 font-mono"
-                    placeholder="Leave blank to use STT_API_KEY from .env.local"
+                    placeholder={
+                      sttConfig.provider === 'Gemini'
+                        ? 'Leave blank to use GEMINI_API_KEY from .env.local'
+                        : 'Leave blank to use STT_API_KEY from .env.local'
+                    }
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    {sttConfig.provider === 'Gemini'
+                      ? 'Natively transcribes MP3, WAV, M4A, AAC, and FLAC word-for-word with timestamps and speaker tags.'
+                      : 'Uses your configured Google Cloud / AssemblyAI credentials.'}
+                  </p>
                 </div>
 
                 <div>
@@ -907,6 +1138,57 @@ export default function Home() {
                   >
                     Test Connection (API 2)
                   </button>
+                </div>
+
+                {/* Prompt Instructions Editor inside Settings */}
+                <div className="pt-4 border-t border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-slate-200 font-semibold text-xs">AI Prompt &amp; Editing Instructions (Trae AI style)</label>
+                      <p className="text-[11px] text-slate-400">Custom rules for transcript reconstruction. Overrides hardcoded backend logic.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleResetPromptToDefault}
+                      className="text-[11px] text-indigo-400 hover:text-indigo-300 underline"
+                    >
+                      Reset to 29-Point Engine
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1 bg-slate-950 p-2 rounded border border-slate-800 text-[10px]">
+                    <span className="text-slate-400 mr-1 font-semibold">Variables:</span>
+                    {[
+                      { label: 'Name', tag: '{{PROSPECT_FULL_NAME}}' },
+                      { label: 'Company', tag: '{{PROSPECT_COMPANY}}' },
+                      { label: 'Title', tag: '{{PROSPECT_JOB_TITLE}}' },
+                      { label: 'Email', tag: '{{PROSPECT_EMAIL}}' },
+                      { label: 'Asset', tag: '{{ASSET_TITLE}}' },
+                      { label: 'ValueProp', tag: '{{VALUE_PROPOSITION}}' },
+                      { label: 'RawText', tag: '{{RAW_TRANSCRIPT}}' }
+                    ].map(item => (
+                      <button
+                        key={item.tag}
+                        type="button"
+                        onClick={() => handleInsertTag(item.tag)}
+                        className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 font-mono"
+                      >
+                        +{item.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <textarea
+                    rows={8}
+                    value={customPrompt}
+                    onChange={(e) => setCustomPrompt(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
+                    placeholder="Enter prompt instructions..."
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-500">
+                    <span>{customPrompt.length} chars</span>
+                    <span>Saved automatically with Save Configurations</span>
+                  </div>
                 </div>
               </div>
             )}

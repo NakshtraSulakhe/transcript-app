@@ -1,129 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { AssemblyAI } from 'assemblyai';
-
-const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY || '';
-const client = new AssemblyAI({
-  apiKey: ASSEMBLYAI_API_KEY,
-});
-
-export interface LeadInfo {
-  firstName: string;
-  lastName: string;
-  companyName: string;
-  email: string;
-  jobTitle: string;
-}
-
-export interface CampaignInfo {
-  campaignName: string;
-  assetTitle: string;
-  valueProposition: string;
-}
-
-export interface GeminiConfig {
-  apiKey?: string;
-  model?: string;
-  temperature?: number;
-  maxTokens?: number;
-}
-
-interface RequestSettings {
-  leadInfo: LeadInfo;
-  campaignInfo: CampaignInfo;
-  geminiConfig?: GeminiConfig;
-}
-
-async function transcribeAudio(file: File): Promise<string> {
-  if (!ASSEMBLYAI_API_KEY) {
-    throw new Error('AssemblyAI API key not configured. Please set ASSEMBLYAI_API_KEY environment variable.');
-  }
-
-  try {
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    // Upload audio file to AssemblyAI using REST API
-    const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
-      method: 'POST',
-      headers: {
-        'Authorization': ASSEMBLYAI_API_KEY,
-        'Content-Type': 'application/octet-stream',
-      },
-      body: buffer,
-    });
-
-    if (!uploadResponse.ok) {
-      const errorData = await uploadResponse.json();
-      throw new Error(`Upload failed: ${uploadResponse.status} - ${JSON.stringify(errorData)}`);
-    }
-
-    const uploadData = await uploadResponse.json();
-    const audioUrl = uploadData.upload_url;
-
-    if (!audioUrl) {
-      throw new Error('Upload did not return an audio URL');
-    }
-
-    // Transcribe the audio
-    const transcriptResponse = await client.transcripts.transcribe({
-      audio_url: audioUrl,
-      speaker_labels: true,
-      disfluencies: true,
-      speakers_expected: 2,
-    }) as any;
-
-    if (transcriptResponse.error) {
-      throw new Error(`Transcription failed: ${transcriptResponse.error}`);
-    }
-
-    let formattedTranscript = '';
-    if (transcriptResponse.utterances && transcriptResponse.utterances.length > 0) {
-      transcriptResponse.utterances.forEach((utterance: any) => {
-        const startTime = (utterance.start / 1000).toFixed(2);
-        const endTime = (utterance.end / 1000).toFixed(2);
-        const speaker = utterance.speaker ? `Speaker ${utterance.speaker}` : 'Unknown';
-        const text = utterance.text;
-        
-        formattedTranscript += `[${startTime}s-${endTime}s] [${speaker}]: ${text}\n\n`;
-      });
-    } else if (transcriptResponse.text) {
-      formattedTranscript = transcriptResponse.text;
-    }
-
-    return formattedTranscript.trim();
-  } catch (error) {
-    console.error('AssemblyAI error:', error);
-    throw new Error(`Failed to transcribe audio: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-}
-
-async function processTranscriptWithGemini(
-  rawTranscript: string,
-  leadInfo: LeadInfo,
-  campaignInfo: CampaignInfo,
-  geminiConfig?: GeminiConfig
-) {
-  const apiKey = geminiConfig?.apiKey || process.env.GEMINI_API_KEY;
-  const model = geminiConfig?.model || 'gemini-2.0-flash';
-  const temperature = geminiConfig?.temperature ?? 0.2;
-  const maxTokens = geminiConfig?.maxTokens ?? 2048;
-
-  if (!apiKey) {
-    return {
-      modifiedTranscript: generateFallbackModifiedTranscript(rawTranscript, leadInfo, campaignInfo),
-      qaCheckpoints: generateFallbackQACheckpoints(rawTranscript),
-      missingInformation: ['Gemini API key not configured. Output generated using basic rule engine.'],
-      processingNotes: 'Gemini API Key missing. Configure in Settings to enable full AI QA and structuring.'
-    };
-  }
-
-  const prospectFullName = [leadInfo.firstName, leadInfo.lastName].filter(Boolean).join(' ') || leadInfo.firstName || 'Laura McDurmont';
-  const prospectJobTitle = leadInfo.jobTitle || 'Director, Network, Voice, Cloud and Datacenter Services';
-  const prospectCompany = leadInfo.companyName || 'Energizer Holdings';
-  const prospectEmail = leadInfo.email || 'laura.mcdurmont@energizer.com';
-
-  const prompt = `
-CALL RECORDING TRANSCRIPTION & EDITING ENGINE
+// lib/defaultPrompt.ts
+export const DEFAULT_AI_PROMPT_TEMPLATE = `CALL RECORDING TRANSCRIPTION & EDITING ENGINE
 
 ROLE:
 You are an expert B2B call-transcript editor for TGS Tech Info / Taraj Global Solutions.
@@ -246,28 +122,28 @@ For payroll campaigns:
 "Actually, I'm reaching out to inform you about a structured payroll solution that helps HR teams identify and implement payroll software that simplifies payroll processing, improves accuracy and compliance, and ensures timely employee payments."
 For LMS campaigns or other outreach:
 "Actually, I'm reaching out quickly to inform you about the structured LMS resource. We help learning and development teams find and implement Learning Management System solutions that make it easier to deliver training, engage learners, and track progress, helping organizations improve employee learning and development."
-(Or dynamically feature Asset: "${campaignInfo.assetTitle || 'LMS'}" - "${campaignInfo.valueProposition || ''}")
+(Or dynamically feature Asset: "{{ASSET_TITLE}}" - "{{VALUE_PROPOSITION}}")
 
 8. EMAIL ADDRESS HANDLING:
 Email addresses are critical data.
 Correct obvious speech-to-text formatting problems ("at" -> "@", "dot" -> ".", remove spaces).
-Use verified email: ${prospectEmail}
+Use verified email: {{PROSPECT_EMAIL}}
 If the prospect corrects the email, use the corrected version. Never invent an email address.
 STRICT RULE: We are NOT sharing or sending any guides, reports, collateral, or emails!
 If there are mentions of sending/sharing guides, reports, collateral, or emails in the original audio, completely remove or rewrite them so there are zero references to sending or sharing anything via email. Email is verified purely as contact confirmation on file.
 
 9. NAME CORRECTION:
 Correct names only when the recording provides enough evidence, referencing:
-- Prospect Full Name: ${prospectFullName}
+- Prospect Full Name: {{PROSPECT_FULL_NAME}}
 If the person identifies themselves with a specific name during the call, use that name consistently.
 
 10. COMPANY NAME CORRECTION:
 Correct obvious speech-recognition errors (e.g., "American Crack Show Association" -> "American Correctional Association") using reference data:
-- Company: ${prospectCompany}
+- Company: {{PROSPECT_COMPANY}}
 
 11. JOB TITLE CORRECTION:
 Preserve the prospect's actual job title:
-- Job Title: ${prospectJobTitle}
+- Job Title: {{PROSPECT_JOB_TITLE}}
 Do not alter seniority or convert into a different role.
 
 12. QUALIFICATION QUESTION STANDARDIZATION:
@@ -324,10 +200,10 @@ The final output should still sound like a real telephone conversation. Keep nat
 The caller can be professionally cleaned. The prospect should remain close to what they actually said.
 
 24. CAMPAIGN-SPECIFIC TERMINOLOGY:
-Maintain campaign consistency (${campaignInfo.campaignName || 'B2B Campaign'}).
+Maintain campaign consistency ({{CAMPAIGN_NAME}}).
 
 25. INPUT METADATA:
-Use supplied lead data (${prospectFullName}, ${prospectCompany}, ${prospectJobTitle}, ${prospectEmail}) only to resolve obvious transcription errors, prioritizing explicit call confirmations.
+Use supplied lead data ({{PROSPECT_FULL_NAME}}, {{PROSPECT_COMPANY}}, {{PROSPECT_JOB_TITLE}}, {{PROSPECT_EMAIL}}) only to resolve obvious transcription errors, prioritizing explicit call confirmations.
 
 26. FINAL QUALITY CHECK:
 Ensure accuracy, completeness, cleaning, and integrity before output.
@@ -354,22 +230,30 @@ NOT:
 The recording is the source of truth.
 
 LEAD REFERENCE DATA:
-- Prospect Full Name: ${prospectFullName}
-- Company Name: ${prospectCompany}
-- Job Title: ${prospectJobTitle}
-- Verified Email: ${prospectEmail}
+- Prospect Full Name: {{PROSPECT_FULL_NAME}}
+- Company Name: {{PROSPECT_COMPANY}}
+- Job Title: {{PROSPECT_JOB_TITLE}}
+- Verified Email: {{PROSPECT_EMAIL}}
 - Calling Company: TGS Tech Info
 
 RAW TRANSCRIPT (SOURCE OF TRUTH):
 """
-${rawTranscript}
+{{RAW_TRANSCRIPT}}
 """
 
-OUTPUT FORMAT REQUIRED:
-Return ONLY a valid JSON object with the following exact keys:
+REQUIRED OUTPUT JSON FORMAT:
+Return ONLY a valid JSON object matching this structure:
 {
+  "status": "success",
+  "agent_name": "[Detected Agent Name or Jason Smith]",
+  "prospect_name": "{{PROSPECT_FULL_NAME}}",
   "modified_transcript": "Paragraph 1...\\n\\nParagraph 2...\\n\\nParagraph 3...\\n\\nParagraph 4...",
-  "qa_checkpoints": {
+  "qualification": {
+    "implementation_question_asked": true,
+    "implementation_response": "[Prospect's actual confirmed evaluation answer from audio, e.g. I believe so, I think so, Yes, Probably, Could be, Might be, Yes we are looking into options]",
+    "implementation_timeline": "[Prospect's actual confirmed timeline in months from audio, e.g. One to two months, Two to three months, Three to six months, Six months, Three months]"
+  },
+  "checkpoints": {
     "prospect_identified": true,
     "tgs_tech_info_introduction": true,
     "role_and_company_confirmed": true,
@@ -382,137 +266,6 @@ Return ONLY a valid JSON object with the following exact keys:
     "call_closing_present": true
   },
   "missing_information": [],
-  "processing_notes": "Brief explanation of changes and QA findings"
+  "processing_notes": "Brief summary of edits, confirmed details, and timeline captured in months"
 }
 `;
-
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature,
-            maxOutputTokens: maxTokens,
-            responseMimeType: 'application/json'
-          }
-        })
-      }
-    );
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Gemini API error (${response.status}): ${errText}`);
-    }
-
-    const data = await response.json();
-    const rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!rawContent) {
-      throw new Error('Gemini returned an empty response');
-    }
-
-    const parsed = JSON.parse(rawContent);
-    return {
-      modifiedTranscript: parsed.modified_transcript || '',
-      qaCheckpoints: parsed.qa_checkpoints || {},
-      missingInformation: parsed.missing_information || [],
-      processingNotes: parsed.processing_notes || ''
-    };
-  } catch (error) {
-    console.error('Gemini processing error:', error);
-    return {
-      modifiedTranscript: generateFallbackModifiedTranscript(rawTranscript, leadInfo, campaignInfo),
-      qaCheckpoints: generateFallbackQACheckpoints(rawTranscript),
-      missingInformation: [`AI processing error: ${error instanceof Error ? error.message : 'Unknown error'}`],
-      processingNotes: 'Fell back to rule engine due to AI processing error.'
-    };
-  }
-}
-
-function generateFallbackModifiedTranscript(rawTranscript: string, lead: LeadInfo, campaign: CampaignInfo): string {
-  const prospectName = `${lead.firstName || 'Prospect'} ${lead.lastName || ''}`.trim();
-  const p1 = `The agent confirmed they were speaking with ${prospectName}, introduced themselves from TGS Tech Info, and established context for the cold call based on professional outreach.`;
-  const p2 = `The agent explained that TGS Tech Info works with organizations around ${campaign.assetTitle || 'solutions'}, specifically helping teams with: ${campaign.valueProposition || 'improving operational effectiveness'}.`;
-  const p3 = `When discussed regarding evaluation of ${campaign.assetTitle || 'solutions'}, the transcript was processed. Implementation timeline was recorded as [Not Captured].`;
-  const p4 = `The agent thanked ${prospectName} for their time, indicated a specialist may reach out if appropriate, and concluded the call professionally.`;
-
-  return `${p1}\n\n${p2}\n\n${p3}\n\n${p4}`;
-}
-
-function generateFallbackQACheckpoints(rawTranscript: string) {
-  const lower = rawTranscript.toLowerCase();
-  return {
-    prospect_identified: lower.includes('speaking') || lower.includes('hello') || lower.includes('hi'),
-    tgs_tech_info_introduction: lower.includes('tgs tech info') || lower.includes('tgs'),
-    cold_call_context: !lower.includes('sent an email') && !lower.includes('downloaded'),
-    value_proposition_present: true,
-    implementation_question_asked: lower.includes('evaluating') || lower.includes('looking for') || lower.includes('exploring'),
-    implementation_response: lower.includes('yes') || lower.includes('sure') ? 'YES' : 'NOT_CAPTURED',
-    implementation_timeline: '[Not Captured]',
-    timeline_captured: false,
-    specialist_followup_mentioned: lower.includes('specialist') || lower.includes('follow up'),
-    call_closing_present: lower.includes('thank') || lower.includes('goodbye') || lower.includes('have a')
-  };
-}
-
-export async function POST(request: NextRequest) {
-  try {
-    const formData = await request.formData();
-    const file = formData.get('file') as File | null;
-    const settingsStr = formData.get('settings') as string;
-    const rawTranscriptInput = formData.get('rawTranscript') as string | null;
-
-    if (!settingsStr) {
-      return NextResponse.json({ error: 'Settings payload is required' }, { status: 400 });
-    }
-
-    const settings: RequestSettings = JSON.parse(settingsStr);
-    let rawTranscript = rawTranscriptInput || '';
-
-    // If an audio file is uploaded, perform STT transcription first
-    if (file && file.size > 0) {
-      try {
-        rawTranscript = await transcribeAudio(file);
-      } catch (sttError) {
-        console.error('STT Error:', sttError);
-        return NextResponse.json(
-          { error: sttError instanceof Error ? sttError.message : 'Audio transcription failed' },
-          { status: 500 }
-        );
-      }
-    }
-
-    if (!rawTranscript) {
-      return NextResponse.json({ error: 'Please provide either an audio file or raw transcript text.' }, { status: 400 });
-    }
-
-    // Process with Gemini AI Call Transcript Modification Engine
-    const geminiResult = await processTranscriptWithGemini(
-      rawTranscript,
-      settings.leadInfo,
-      settings.campaignInfo,
-      settings.geminiConfig
-    );
-
-    return NextResponse.json({
-      rawTranscript,
-      modifiedTranscript: geminiResult.modifiedTranscript,
-      qaCheckpoints: geminiResult.qaCheckpoints,
-      missingInformation: geminiResult.missingInformation,
-      processingNotes: geminiResult.processingNotes,
-      leadInfo: settings.leadInfo,
-      campaignInfo: settings.campaignInfo
-    });
-
-  } catch (error) {
-    console.error('Transcription error:', error);
-    return NextResponse.json(
-      { error: 'Failed to process request', details: error instanceof Error ? error.message : 'Unknown error' },
-      { status: 500 }
-    );
-  }
-}

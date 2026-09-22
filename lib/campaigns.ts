@@ -25,6 +25,18 @@ export const DEFAULT_CAMPAIGNS: Campaign[] = [
     valueProposition: 'Assists cloud architects and IT executive teams in accelerating cloud migration, reducing operational infrastructure overhead, and enhancing cross-region application scalability.',
   },
   {
+    id: 'hris-campaign',
+    name: 'HRIS Solutions Campaign',
+    assetTitle: 'Human Resources Information System (HRIS)',
+    valueProposition: 'Helps HR teams identify and implement HRIS solutions that improve employee data management, HR process automation, and workforce management, enabling organizations to operate more efficiently and achieve better HR outcomes.',
+  },
+  {
+    id: 'payroll-campaign',
+    name: 'Payroll Solutions Campaign',
+    assetTitle: 'Payroll Software & Compliance Solution',
+    valueProposition: 'Helps HR teams identify and implement payroll software that simplifies payroll processing, improves accuracy and compliance, and ensures timely employee payments.',
+  },
+  {
     id: 'hr-systems-campaign',
     name: 'HR Systems Modernization',
     assetTitle: 'Human Capital Management (HCM) Platform',

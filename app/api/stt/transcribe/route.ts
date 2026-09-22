@@ -84,22 +84,30 @@ function formatGoogleSpeechResults(results: any[]): string {
     return 'No speech recognized in audio file.';
   }
 
-  // Check if any results contain word-level speaker diarization tags
-  let allWordsWithTags: any[] = [];
-  for (const res of results) {
-    const words = res.alternatives?.[0]?.words || [];
-    for (const w of words) {
-      if (w.speakerTag !== undefined && w.speakerTag !== null) {
-        allWordsWithTags.push(w);
+  // In Google Cloud Speech v1, the last result often contains the full diarized word array
+  const lastResult = results[results.length - 1];
+  const lastWords = lastResult?.alternatives?.[0]?.words || [];
+  const hasDiarizationInLast = lastWords.some((w: any) => w.speakerTag && w.speakerTag > 0);
+
+  let wordsToProcess: any[] = [];
+  if (hasDiarizationInLast && lastWords.length > 5) {
+    wordsToProcess = lastWords.filter((w: any) => w.speakerTag && w.speakerTag > 0);
+  } else {
+    for (const res of results) {
+      const words = res.alternatives?.[0]?.words || [];
+      for (const w of words) {
+        if (w.speakerTag && w.speakerTag > 0) {
+          wordsToProcess.push(w);
+        }
       }
     }
   }
 
-  if (allWordsWithTags.length > 0) {
+  if (wordsToProcess.length > 0) {
     const turns: { speaker: number; words: string[]; start: string; end: string }[] = [];
     let currentTurn: { speaker: number; words: string[]; start: string; end: string } | null = null;
 
-    for (const w of allWordsWithTags) {
+    for (const w of wordsToProcess) {
       const speaker = w.speakerTag || 1;
       const wordText = w.word || '';
       const startSec = (parseFloat(w.startTime?.seconds || '0') + (w.startTime?.nanos || 0) / 1e9).toFixed(1);
@@ -145,6 +153,76 @@ function formatGoogleSpeechResults(results: any[]): string {
   return lines.join('\n\n') || 'No speech recognized in audio file.';
 }
 
+// Gemini Multimodal Native Audio Transcription (Ultra-High Precision)
+async function transcribeWithGeminiAudio(buffer: Buffer, fileName: string, apiKey: string): Promise<string> {
+  const ext = fileName.toLowerCase().split('.').pop() || 'wav';
+  let mimeType = 'audio/wav';
+  if (ext === 'mp3') mimeType = 'audio/mp3';
+  if (ext === 'm4a') mimeType = 'audio/m4a';
+  if (ext === 'aac') mimeType = 'audio/aac';
+  if (ext === 'ogg') mimeType = 'audio/ogg';
+  if (ext === 'flac') mimeType = 'audio/flac';
+  if (ext === 'webm') mimeType = 'audio/webm';
+  if (ext === 'mp4') mimeType = 'audio/mp4';
+
+  const base64Audio = buffer.toString('base64');
+  const prompt = `You are an expert verbatim audio transcriptionist.
+Your mission is to produce an EXACT, 100% VERBATIM Speech-to-Text transcript of this call audio recording.
+
+RULES:
+1. Transcribe EVERY single word spoken accurately word-for-word and line-by-line.
+2. Accurately identify distinct speakers (e.g. [Speaker 1], [Speaker 2]) and include timestamps for each turn: [MM:SS - MM:SS] [Speaker X]: ...
+3. Do NOT summarize. Do NOT skip quiet words, background confirmations, names, emails, or numbers.
+4. Capture natural speech accurately including affirmations ("Yes", "I believe so", "I think so", "Ok", "Yeah") and numbers/timelines ("six months", "three months").
+5. Return ONLY the verbatim transcript lines.`;
+
+  const models = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash'];
+  let lastError = '';
+
+  for (const model of models) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                {
+                  inlineData: {
+                    mimeType,
+                    data: base64Audio
+                  }
+                },
+                { text: prompt }
+              ]
+            }],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 8192
+            }
+          })
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text && text.trim().length > 0) {
+          return text.trim();
+        }
+      } else {
+        lastError = await response.text();
+      }
+    } catch (e: any) {
+      lastError = e?.message || String(e);
+    }
+  }
+
+  throw new Error(`Gemini Audio Transcription failed: ${lastError}`);
+}
+
 // Google Cloud Storage + Speech longRunningRecognize implementation
 async function transcribeWithGCSAndLongRunning(
   buffer: Buffer,
@@ -161,6 +239,7 @@ async function transcribeWithGCSAndLongRunning(
   if (ext === 'mp3') mimeType = 'audio/mp3';
   if (ext === 'flac') mimeType = 'audio/flac';
   if (ext === 'ogg') mimeType = 'audio/ogg';
+  if (ext === 'm4a') mimeType = 'audio/m4a';
 
   // Step 1: Upload Audio to Google Cloud Storage Bucket
   await uploadFileToGCS(buffer, gcsBucket, objectName, mimeType, apiKey);
@@ -172,17 +251,39 @@ async function transcribeWithGCSAndLongRunning(
       languageCode: language || 'en-US',
       enableAutomaticPunctuation: true,
       enableWordTimeOffsets: true,
+      useEnhanced: true,
+      model: 'latest_long',
       diarizationConfig: {
         enableSpeakerDiarization: true,
         minSpeakerCount: 2,
         maxSpeakerCount: 3,
       },
-      model: 'default',
+      speechContexts: [
+        {
+          phrases: [
+            'TGS Tech Info',
+            'Learning Management System',
+            'LMS',
+            'Director',
+            'VP',
+            'Manager',
+            'evaluate',
+            'exploring',
+            'zero to three months',
+            'three to six months',
+            'six months',
+            'three months',
+            'representative',
+            'follow up'
+          ],
+          boost: 15.0
+        }
+      ]
     };
 
     if (ext === 'mp3') config.encoding = 'MP3';
     if (ext === 'flac') config.encoding = 'FLAC';
-    if (ext === 'wav') config.encoding = 'LINEAR16';
+    if (ext === 'ogg') config.encoding = 'OGG_OPUS';
 
     // Strategy 1: Use @google-cloud/speech SDK (authenticated with Google Cloud IAM / ADC)
     try {
@@ -298,13 +399,35 @@ async function transcribeWithGoogleCloud(
     languageCode: language || 'en-US',
     enableAutomaticPunctuation: true,
     enableWordTimeOffsets: true,
-    model: 'default',
+    useEnhanced: true,
+    model: 'latest_long',
+    speechContexts: [
+      {
+        phrases: [
+          'TGS Tech Info',
+          'Learning Management System',
+          'LMS',
+          'Director',
+          'VP',
+          'Manager',
+          'evaluate',
+          'exploring',
+          'zero to three months',
+          'three to six months',
+          'six months',
+          'three months',
+          'representative',
+          'follow up'
+        ],
+        boost: 15.0
+      }
+    ]
   };
 
   const ext = fileName.toLowerCase().split('.').pop();
   if (ext === 'mp3') config.encoding = 'MP3';
   if (ext === 'flac') config.encoding = 'FLAC';
-  if (ext === 'wav') config.encoding = 'LINEAR16';
+  if (ext === 'ogg') config.encoding = 'OGG_OPUS';
 
   // Strategy 1: SpeechClient SDK (IAM / ADC)
   try {
@@ -431,7 +554,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (!sttConfig.apiKey) {
+    const isGeminiProvider = sttConfig.provider === 'Gemini' || sttConfig.provider === 'GoogleGemini';
+    const effectiveApiKey = isGeminiProvider
+      ? (sttConfig.apiKey || process.env.GEMINI_API_KEY || '')
+      : (sttConfig.apiKey || process.env.STT_API_KEY || process.env.GOOGLE_SPEECH_API_KEY || process.env.GEMINI_API_KEY || '');
+
+    if (!effectiveApiKey) {
       return NextResponse.json(
         { error: 'API 1 Key Missing. Please enter your API Key in Transcription API Settings (API 1).' },
         { status: 400 }
@@ -442,24 +570,43 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     let rawTranscript = '';
+    let actualProviderUsed = sttConfig.provider;
 
     if (sttConfig.provider === 'AssemblyAI') {
-      rawTranscript = await transcribeWithAssemblyAI(buffer, sttConfig.apiKey);
+      rawTranscript = await transcribeWithAssemblyAI(buffer, effectiveApiKey);
+    } else if (isGeminiProvider) {
+      rawTranscript = await transcribeWithGeminiAudio(buffer, file.name, effectiveApiKey);
+      actualProviderUsed = 'Gemini Multimodal STT';
     } else {
-      rawTranscript = await transcribeWithGoogleCloud(
-        buffer,
-        file.name,
-        sttConfig.apiKey,
-        sttConfig.gcsBucket,
-        sttConfig.language
-      );
+      // Default: Google Cloud Speech-to-Text with automatic Gemini fallback
+      try {
+        rawTranscript = await transcribeWithGoogleCloud(
+          buffer,
+          file.name,
+          effectiveApiKey,
+          sttConfig.gcsBucket,
+          sttConfig.language
+        );
+        if (!rawTranscript || rawTranscript.trim() === '' || rawTranscript.includes('No speech recognized')) {
+          throw new Error('Google Cloud Speech returned no speech for this audio format.');
+        }
+      } catch (googleErr: any) {
+        const geminiKey = process.env.GEMINI_API_KEY || (effectiveApiKey.startsWith('AQ') ? effectiveApiKey : '');
+        if (geminiKey) {
+          console.warn('Google Cloud Speech encountered an issue, falling back to Gemini Multimodal Audio STT:', googleErr.message);
+          rawTranscript = await transcribeWithGeminiAudio(buffer, file.name, geminiKey);
+          actualProviderUsed = 'Gemini Multimodal STT (High Precision)';
+        } else {
+          throw googleErr;
+        }
+      }
     }
 
     return NextResponse.json({
       success: true,
       transcriptionStatus: 'transcription_completed',
       rawTranscript,
-      transcriptionProvider: sttConfig.provider,
+      transcriptionProvider: actualProviderUsed,
       filename: file.name,
       processedAt: new Date().toISOString()
     });
