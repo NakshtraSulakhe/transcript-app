@@ -33,9 +33,11 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
-# API credentials
+# API credentials & local data
 google-credentials.json
 assemblyai-credentials.json
+data/
+data/db.json
 
 # vercel
 .vercel
@@ -43,3 +45,4 @@ assemblyai-credentials.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+

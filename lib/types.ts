@@ -17,6 +17,37 @@ export interface AIConfig {
   customPrompt?: string;
 }
 
+export interface CRMConfig {
+  crmApiUrl: string;
+  crmApiKey?: string;
+}
+
+export interface ClientRecord {
+  id?: number | string;
+  clientCode: string;
+  name: string;
+  mainPrompt: string;
+  clientRules: string;
+  status: 'active' | 'inactive';
+  createdAt?: string;
+  updatedAt?: string;
+  campaigns?: CampaignRecord[];
+}
+
+export interface CampaignRecord {
+  id?: number | string;
+  clientId?: number | string;
+  clientCode: string;
+  campaignCode: string;
+  campaignName: string;
+  assetTitle: string;
+  campaignRules?: string;
+  valuePropositions: string[];
+  status: 'active' | 'inactive';
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface LeadInfo {
   firstName: string;
   lastName: string;
@@ -79,3 +110,34 @@ export interface TranscriptRecord {
   processingNotes: string;
   processedAt?: string;
 }
+
+export interface StoredLead {
+  id: string;
+  srNo?: number;
+  createdAt?: string;
+  clientCode: string;
+  campaignCode: string;
+  campaignName?: string;
+  agentName?: string;
+  firstName: string;
+  lastName?: string;
+  email: string;
+  contactNumber?: string;
+  companyName?: string;
+  country?: string;
+  jobTitle?: string;
+  formStatus?: string;
+  qaStatus?: string;
+  clientDeliveryStatus?: string;
+  recordingUrl?: string;
+  rawTranscript?: string;
+  modifiedTranscript?: string;
+  sttDurationMs?: number;
+  aiDurationMs?: number;
+  qualification?: any;
+  checkpoints?: QACheckpoints;
+  missingInformation?: string[];
+  processingNotes?: string;
+  processedAt?: string;
+}
+
