@@ -273,52 +273,60 @@ export default function Home() {
     setShowSettingsModal(false);
   };
 
-  // Helper to perform direct-to-cloud upload (bypassing Vercel 4.5MB payload limit)
-  const uploadAudioDirectlyToCloud = async (audioFile: File): Promise<{ gcsUri?: string; objectName?: string; audioUrl?: string }> => {
-    // 1. Get signed / direct upload URL from backend
-    const urlRes = await fetch('/api/stt/upload-url', {
+  // Helper: Request V4 Signed Upload URL from Server & Upload DIRECTLY from Browser to Google Cloud Storage
+  const uploadAudioToGCSDirectly = async (
+    audioFile: File
+  ): Promise<{ gcsUri?: string; objectName?: string; audioUrl?: string }> => {
+    if (sttConfig.provider === 'AssemblyAI') {
+      const assemblyKey = (sttConfig.apiKey || '').trim();
+      const res = await fetch('https://api.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: { Authorization: assemblyKey },
+        body: audioFile
+      });
+      if (!res.ok) throw new Error(`AssemblyAI Upload Failed (${res.status})`);
+      const data = await res.json();
+      return { audioUrl: data.upload_url };
+    }
+
+    const mimeType = audioFile.type || 'audio/wav';
+
+    // 1. Request V4 Signed Upload URL from Next.js server endpoint (/api/storage/signed-url)
+    const urlRes = await fetch('/api/storage/signed-url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         filename: audioFile.name,
-        mimeType: audioFile.type || 'audio/wav',
+        mimeType,
         sttConfig
       })
     });
 
     const urlData = await urlRes.json();
-    if (!urlRes.ok || !urlData.success || !urlData.uploadUrl) {
-      throw new Error(urlData.error || 'Failed to generate cloud upload URL');
+    if (!urlRes.ok || !urlData.uploadUrl) {
+      throw new Error(urlData.error || 'Failed to generate GCS V4 Signed Upload URL.');
     }
 
-    // 2. Perform direct upload from Browser to GCS / AssemblyAI
-    const uploadHeaders: Record<string, string> = { ...(urlData.headers || {}) };
-    if (!uploadHeaders['Content-Type']) {
-      uploadHeaders['Content-Type'] = audioFile.type || 'audio/wav';
-    }
+    const { uploadUrl, objectName, gcsUri } = urlData;
 
-    const directUploadRes = await fetch(urlData.uploadUrl, {
-      method: urlData.method || 'PUT',
-      headers: uploadHeaders,
+    // 2. Upload recording DIRECTLY from Browser to Google Cloud Storage Signed URL (HTTP PUT)
+    // Binary audio goes directly: Browser -> Google Cloud Storage (bypasses Vercel 4.5MB payload limit)
+    const directUploadRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': mimeType
+      },
       body: audioFile
     });
 
     if (!directUploadRes.ok) {
-      const uploadErrText = await directUploadRes.text().catch(() => '');
+      const errText = await directUploadRes.text().catch(() => '');
       throw new Error(
-        `Direct Cloud Upload Failed (${directUploadRes.status}). ${uploadErrText || 'Please check GCS bucket permissions or CORS settings.'}`
+        `Direct GCS PUT Upload Failed (HTTP ${directUploadRes.status}). ${errText || 'Please verify GCS Bucket CORS configuration permits PUT from this origin.'}`
       );
     }
 
-    if (urlData.provider === 'AssemblyAI') {
-      const assemblyData = await directUploadRes.json().catch(() => ({}));
-      return { audioUrl: assemblyData.upload_url };
-    }
-
-    return {
-      gcsUri: urlData.gcsUri,
-      objectName: urlData.objectName
-    };
+    return { gcsUri, objectName };
   };
 
   // STEP 1: API 1 — Transcribe Audio Recording -> raw_transcript ONLY
@@ -332,7 +340,7 @@ export default function Home() {
     setWorkflowStatus('uploading');
 
     try {
-      const cloudUploadResult = await uploadAudioDirectlyToCloud(file);
+      const cloudUploadResult = await uploadAudioToGCSDirectly(file);
       setWorkflowStatus('transcription_processing');
 
       const res = await fetch('/api/stt/transcribe', {
@@ -424,7 +432,7 @@ export default function Home() {
       setWorkflowStatus('uploading');
 
       try {
-        const cloudUploadResult = await uploadAudioDirectlyToCloud(file);
+        const cloudUploadResult = await uploadAudioToGCSDirectly(file);
         setWorkflowStatus('transcription_processing');
 
         const res = await fetch('/api/stt/transcribe', {
