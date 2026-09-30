@@ -1,186 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AssemblyAI } from 'assemblyai';
-import { Storage } from '@google-cloud/storage';
-import { SpeechClient } from '@google-cloud/speech';
 import { STTConfig } from '@/lib/types';
-
-function getSpeechClient(): SpeechClient {
-  let speechOptions: any = {};
-  if (process.env.GOOGLE_CLOUD_PROJECT) {
-    speechOptions.projectId = process.env.GOOGLE_CLOUD_PROJECT;
-  }
-  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    const credVal = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
-    if (credVal.startsWith('{')) {
-      speechOptions.credentials = JSON.parse(credVal);
-    } else {
-      speechOptions.keyFilename = credVal;
-    }
-  }
-  return new SpeechClient(speechOptions);
-}
-
-// Upload helper supporting both @google-cloud/storage SDK (Service Account / ADC) and REST API Key
-async function uploadFileToGCS(
-  buffer: Buffer,
-  gcsBucket: string,
-  objectName: string,
-  mimeType: string,
-  apiKey: string
-): Promise<void> {
-  let sdkErrorMessage = '';
-  // Strategy 1: Try @google-cloud/storage SDK
-  try {
-    let storageOptions: any = {};
-    if (process.env.GOOGLE_CLOUD_PROJECT) {
-      storageOptions.projectId = process.env.GOOGLE_CLOUD_PROJECT;
-    }
-    if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-      const credVal = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
-      if (credVal.startsWith('{')) {
-        storageOptions.credentials = JSON.parse(credVal);
-      } else {
-        storageOptions.keyFilename = credVal;
-      }
-    }
-    const storage = new Storage(storageOptions);
-    const bucket = storage.bucket(gcsBucket);
-    const file = bucket.file(objectName);
-
-    await file.save(buffer, {
-      contentType: mimeType,
-      resumable: false,
-    });
-    return;
-  } catch (sdkErr: any) {
-    sdkErrorMessage = sdkErr?.message || String(sdkErr);
-    console.error('@google-cloud/storage SDK upload error:', sdkErr);
-  }
-
-  // Strategy 2: REST Upload fallback using API Key
-  const uploadUrl = `https://storage.googleapis.com/upload/storage/v1/b/${gcsBucket}/o?uploadType=media&name=${encodeURIComponent(objectName)}&key=${apiKey}`;
-  const uploadRes = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': mimeType,
-    },
-    body: buffer as any,
-  });
-
-  if (!uploadRes.ok) {
-    const errData = await uploadRes.json().catch(() => ({}));
-    const errObj = errData?.error || {};
-    const rawMessage = errObj.message || `HTTP ${uploadRes.status}`;
-
-    throw new Error(
-      `Google Cloud Storage Upload Failed: SDK Error: "${sdkErrorMessage || 'N/A'}". REST Error (${uploadRes.status}): "${rawMessage}". Please check bucket permissions.`
-    );
-  }
-}
-
-// Helper to download audio file from GCS on server
-async function downloadFileFromGCS(gcsBucket: string, objectName: string, apiKey: string): Promise<Buffer> {
-  try {
-    let storageOptions: any = {};
-    if (process.env.GOOGLE_CLOUD_PROJECT) {
-      storageOptions.projectId = process.env.GOOGLE_CLOUD_PROJECT;
-    }
-    if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-      const credVal = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
-      if (credVal.startsWith('{')) {
-        storageOptions.credentials = JSON.parse(credVal);
-      } else {
-        storageOptions.keyFilename = credVal;
-      }
-    }
-    const storage = new Storage(storageOptions);
-    const [buf] = await storage.bucket(gcsBucket).file(objectName).download();
-    return buf;
-  } catch (sdkErr) {
-    console.warn('SDK download file failed, attempting REST API download fallback:', sdkErr);
-  }
-
-  const downloadUrl = `https://storage.googleapis.com/storage/v1/b/${gcsBucket}/o/${encodeURIComponent(objectName)}?alt=media&key=${apiKey}`;
-  const res = await fetch(downloadUrl);
-  if (!res.ok) {
-    throw new Error(`Failed to download audio file from GCS (${res.status})`);
-  }
-  const arrayBuffer = await res.arrayBuffer();
-  return Buffer.from(arrayBuffer);
-}
-
-// Helper to format Google Speech results word-by-word and line-by-line with speaker diarization and timestamps
-function formatGoogleSpeechResults(results: any[]): string {
-  if (!results || results.length === 0) {
-    return 'No speech recognized in audio file.';
-  }
-
-  const lastResult = results[results.length - 1];
-  const lastWords = lastResult?.alternatives?.[0]?.words || [];
-  const hasDiarizationInLast = lastWords.some((w: any) => w.speakerTag && w.speakerTag > 0);
-
-  let wordsToProcess: any[] = [];
-  if (hasDiarizationInLast && lastWords.length > 5) {
-    wordsToProcess = lastWords.filter((w: any) => w.speakerTag && w.speakerTag > 0);
-  } else {
-    for (const res of results) {
-      const words = res.alternatives?.[0]?.words || [];
-      for (const w of words) {
-        if (w.speakerTag && w.speakerTag > 0) {
-          wordsToProcess.push(w);
-        }
-      }
-    }
-  }
-
-  if (wordsToProcess.length > 0) {
-    const turns: { speaker: number; words: string[]; start: string; end: string }[] = [];
-    let currentTurn: { speaker: number; words: string[]; start: string; end: string } | null = null;
-
-    for (const w of wordsToProcess) {
-      const speaker = w.speakerTag || 1;
-      const wordText = w.word || '';
-      const startSec = (parseFloat(w.startTime?.seconds || '0') + (w.startTime?.nanos || 0) / 1e9).toFixed(1);
-      const endSec = (parseFloat(w.endTime?.seconds || '0') + (w.endTime?.nanos || 0) / 1e9).toFixed(1);
-
-      if (!currentTurn || currentTurn.speaker !== speaker) {
-        if (currentTurn) turns.push(currentTurn);
-        currentTurn = { speaker, words: [wordText], start: startSec, end: endSec };
-      } else {
-        currentTurn.words.push(wordText);
-        currentTurn.end = endSec;
-      }
-    }
-    if (currentTurn) turns.push(currentTurn);
-
-    if (turns.length > 0) {
-      return turns
-        .map(t => `[${t.start}s - ${t.end}s] [Speaker ${t.speaker}]: ${t.words.join(' ')}`)
-        .join('\n\n');
-    }
-  }
-
-  const lines: string[] = [];
-  for (let i = 0; i < results.length; i++) {
-    const alt = results[i].alternatives?.[0];
-    const text = alt?.transcript?.trim();
-    if (!text) continue;
-
-    const words = alt?.words || [];
-    let timeLabel = '';
-    if (words.length > 0) {
-      const firstWord = words[0];
-      const lastWord = words[words.length - 1];
-      const startSec = (parseFloat(firstWord.startTime?.seconds || '0') + (firstWord.startTime?.nanos || 0) / 1e9).toFixed(1);
-      const endSec = (parseFloat(lastWord.endTime?.seconds || '0') + (lastWord.endTime?.nanos || 0) / 1e9).toFixed(1);
-      timeLabel = `[${startSec}s - ${endSec}s] `;
-    }
-
-    lines.push(`${timeLabel}[Line ${i + 1}]: ${text}`);
-  }
-
-  return lines.join('\n\n') || 'No speech recognized in audio file.';
-}
 
 // Gemini Multimodal Native Audio Transcription (Ultra-High Precision)
 async function transcribeWithGeminiAudio(buffer: Buffer, fileName: string, apiKey: string): Promise<string> {
@@ -252,188 +72,23 @@ RULES:
   throw new Error(`Gemini Audio Transcription failed: ${lastError}`);
 }
 
-// Google Cloud Storage + Speech longRunningRecognize implementation via GCS URI
-async function transcribeWithGCSUriAndLongRunning(
-  gcsUri: string,
-  fileName: string,
-  apiKey: string,
-  language: string = 'en-US'
-): Promise<string> {
-  const ext = fileName.toLowerCase().split('.').pop() || 'wav';
-
-  const config: Record<string, any> = {
-    languageCode: language || 'en-US',
-    enableAutomaticPunctuation: true,
-    enableWordTimeOffsets: true,
-    useEnhanced: true,
-    model: 'latest_long',
-    diarizationConfig: {
-      enableSpeakerDiarization: true,
-      minSpeakerCount: 2,
-      maxSpeakerCount: 3,
+async function transcribeWithAssemblyAI(buffer: Buffer, apiKey: string): Promise<string> {
+  const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
+    method: 'POST',
+    headers: {
+      'Authorization': apiKey,
+      'Content-Type': 'application/octet-stream',
     },
-    speechContexts: [
-      {
-        phrases: [
-          'TGS Tech Info',
-          'Learning Management System',
-          'LMS',
-          'Director',
-          'VP',
-          'Manager',
-          'evaluate',
-          'exploring',
-          'zero to three months',
-          'three to six months',
-          'six months',
-          'three months',
-          'representative',
-          'follow up'
-        ],
-        boost: 15.0
-      }
-    ]
-  };
+    body: buffer as any,
+  });
 
-  if (ext === 'mp3') config.encoding = 'MP3';
-  if (ext === 'flac') config.encoding = 'FLAC';
-  if (ext === 'ogg') config.encoding = 'OGG_OPUS';
-
-  // Strategy 1: Use @google-cloud/speech SDK
-  try {
-    const speechClient = getSpeechClient();
-    const [operation] = await speechClient.longRunningRecognize({
-      config,
-      audio: { uri: gcsUri },
-    });
-    const [response] = await operation.promise();
-    const results = response.results || [];
-    return formatGoogleSpeechResults(results);
-  } catch (sdkError: any) {
-    console.warn('SpeechClient SDK longRunningRecognize failed, attempting REST API fallback:', sdkError?.message);
-
-    // Strategy 2: REST fallback with API key
-    const recognizeRes = await fetch(`https://speech.googleapis.com/v1/speech:longrunningrecognize?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        config,
-        audio: { uri: gcsUri },
-      }),
-    });
-
-    if (!recognizeRes.ok) {
-      const errData = await recognizeRes.json().catch(() => ({}));
-      const errObj = errData?.error || {};
-      throw new Error(
-        `Google Speech LongRunningRecognize Failed: SDK Error: "${sdkError?.message || 'N/A'}". REST Error (${recognizeRes.status}): "${errObj.message || 'API request failed'}"`
-      );
-    }
-
-    const opData = await recognizeRes.json();
-    const opName = opData.name;
-
-    if (!opName) {
-      throw new Error('LongRunningRecognize did not return a valid operation name.');
-    }
-
-    let isDone = false;
-    let attempts = 0;
-    let finalResult: any = null;
-
-    while (!isDone && attempts < 90) {
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      attempts++;
-
-      const pollRes = await fetch(`https://speech.googleapis.com/v1/operations/${opName}?key=${apiKey}`);
-      if (!pollRes.ok) continue;
-
-      const pollData = await pollRes.json();
-      if (pollData.done) {
-        isDone = true;
-        if (pollData.error) {
-          throw new Error(`Google Speech Operation Failed: ${pollData.error.message}`);
-        }
-        finalResult = pollData.response;
-      }
-    }
-
-    if (!isDone || !finalResult) {
-      throw new Error('Speech-to-Text long-running recognition timed out after 4.5 minutes.');
-    }
-
-    const results = finalResult.results || [];
-    return formatGoogleSpeechResults(results);
+  if (!uploadResponse.ok) {
+    const errorData = await uploadResponse.json().catch(() => ({}));
+    throw new Error(`AssemblyAI upload failed (${uploadResponse.status}): ${JSON.stringify(errorData)}`);
   }
-}
 
-async function transcribeWithGCSAndLongRunning(
-  buffer: Buffer,
-  fileName: string,
-  apiKey: string,
-  gcsBucket: string,
-  language: string = 'en-US'
-): Promise<string> {
-  const cleanFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const objectName = `transcriptions/${Date.now()}-${cleanFileName}`;
-
-  let mimeType = 'audio/wav';
-  const ext = fileName.toLowerCase().split('.').pop();
-  if (ext === 'mp3') mimeType = 'audio/mp3';
-  if (ext === 'flac') mimeType = 'audio/flac';
-  if (ext === 'ogg') mimeType = 'audio/ogg';
-  if (ext === 'm4a') mimeType = 'audio/m4a';
-
-  await uploadFileToGCS(buffer, gcsBucket, objectName, mimeType, apiKey);
-  const gsUri = `gs://${gcsBucket}/${objectName}`;
-
-  try {
-    return await transcribeWithGCSUriAndLongRunning(gsUri, fileName, apiKey, language);
-  } finally {
-    // Cleanup temporary GCS object
-    try {
-      let storageOptions: any = {};
-      if (process.env.GOOGLE_CLOUD_PROJECT) {
-        storageOptions.projectId = process.env.GOOGLE_CLOUD_PROJECT;
-      }
-      if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-        const credVal = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
-        if (credVal.startsWith('{')) {
-          storageOptions.credentials = JSON.parse(credVal);
-        } else {
-          storageOptions.keyFilename = credVal;
-        }
-      }
-      const storage = new Storage(storageOptions);
-      await storage.bucket(gcsBucket).file(objectName).delete();
-    } catch (cleanupErr) {
-      const deleteUrl = `https://storage.googleapis.com/storage/v1/b/${gcsBucket}/o/${encodeURIComponent(objectName)}?key=${apiKey}`;
-      await fetch(deleteUrl, { method: 'DELETE' }).catch(() => {});
-    }
-  }
-}
-
-async function transcribeWithAssemblyAI(bufferOrUrl: Buffer | string, apiKey: string): Promise<string> {
-  let audioUrl = typeof bufferOrUrl === 'string' ? bufferOrUrl : '';
-
-  if (typeof bufferOrUrl !== 'string') {
-    const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
-      method: 'POST',
-      headers: {
-        'Authorization': apiKey,
-        'Content-Type': 'application/octet-stream',
-      },
-      body: bufferOrUrl as any,
-    });
-
-    if (!uploadResponse.ok) {
-      const errorData = await uploadResponse.json().catch(() => ({}));
-      throw new Error(`AssemblyAI upload failed (${uploadResponse.status}): ${JSON.stringify(errorData)}`);
-    }
-
-    const uploadData = await uploadResponse.json();
-    audioUrl = uploadData.upload_url;
-  }
+  const uploadData = await uploadResponse.json();
+  const audioUrl = uploadData.upload_url;
 
   if (!audioUrl) {
     throw new Error('AssemblyAI upload did not return an audio URL');
@@ -470,134 +125,52 @@ async function transcribeWithAssemblyAI(bufferOrUrl: Buffer | string, apiKey: st
 
 export async function POST(request: NextRequest) {
   try {
-    const contentTypeHeader = request.headers.get('content-type') || '';
+    const formData = await request.formData();
+    const file = formData.get('file') as File | null;
+    const configStr = formData.get('sttConfig') as string | null;
 
-    let gcsUri: string | null = null;
-    let objectName: string | null = null;
-    let audioUrl: string | null = null;
-    let filename: string = 'recording.wav';
-    let buffer: Buffer | null = null;
+    if (!file || file.size === 0) {
+      return NextResponse.json({ error: 'Audio file is required for transcription.' }, { status: 400 });
+    }
 
     let sttConfig: STTConfig = {
-      provider: 'GoogleCloud',
-      apiKey: process.env.STT_API_KEY || process.env.GOOGLE_SPEECH_API_KEY || '',
-      gcsBucket: process.env.GCS_BUCKET_NAME || 'qtranscript-recordings',
-      endpoint: 'https://speech.googleapis.com/v1/speech:longrunningrecognize',
+      provider: 'Gemini',
+      apiKey: process.env.GEMINI_API_KEY || process.env.STT_API_KEY || '',
       language: 'en-US'
     };
 
-    if (contentTypeHeader.includes('application/json')) {
-      const jsonBody = await request.json();
-      gcsUri = jsonBody.gcsUri || null;
-      objectName = jsonBody.objectName || null;
-      audioUrl = jsonBody.audioUrl || null;
-      filename = jsonBody.filename || 'recording.wav';
-
-      if (jsonBody.sttConfig) {
-        if (jsonBody.sttConfig.apiKey) sttConfig.apiKey = jsonBody.sttConfig.apiKey;
-        if (jsonBody.sttConfig.provider) sttConfig.provider = jsonBody.sttConfig.provider;
-        if (jsonBody.sttConfig.gcsBucket) sttConfig.gcsBucket = jsonBody.sttConfig.gcsBucket;
-        if (jsonBody.sttConfig.endpoint) sttConfig.endpoint = jsonBody.sttConfig.endpoint;
-        if (jsonBody.sttConfig.language) sttConfig.language = jsonBody.sttConfig.language;
-      }
-    } else {
-      const formData = await request.formData();
-      const file = formData.get('file') as File | null;
-      const configStr = formData.get('sttConfig') as string | null;
-
-      if (file && file.size > 0) {
-        filename = file.name;
-        const arrayBuffer = await file.arrayBuffer();
-        buffer = Buffer.from(arrayBuffer);
-      }
-
-      if (configStr) {
-        try {
-          const parsed = JSON.parse(configStr);
-          if (parsed.apiKey) sttConfig.apiKey = parsed.apiKey;
-          if (parsed.provider) sttConfig.provider = parsed.provider;
-          if (parsed.gcsBucket) sttConfig.gcsBucket = parsed.gcsBucket;
-          if (parsed.endpoint) sttConfig.endpoint = parsed.endpoint;
-          if (parsed.language) sttConfig.language = parsed.language;
-        } catch (e) {
-          console.warn('Failed to parse sttConfig, fallback to defaults');
-        }
+    if (configStr) {
+      try {
+        const parsed = JSON.parse(configStr);
+        if (parsed.provider) sttConfig.provider = parsed.provider;
+        if (parsed.apiKey) sttConfig.apiKey = parsed.apiKey;
+        if (parsed.language) sttConfig.language = parsed.language;
+      } catch (e) {
+        console.warn('Failed to parse sttConfig, using defaults');
       }
     }
 
-    if (!gcsUri && !audioUrl && (!buffer || buffer.length === 0)) {
-      return NextResponse.json({ error: 'Audio file or GCS object URI is required for transcription.' }, { status: 400 });
-    }
-
-    const isGeminiProvider = sttConfig.provider === 'Gemini' || sttConfig.provider === 'GoogleGemini';
-    const effectiveApiKey = (
-      isGeminiProvider
-        ? (sttConfig.apiKey || process.env.GEMINI_API_KEY || '')
-        : (sttConfig.apiKey || process.env.STT_API_KEY || process.env.GOOGLE_SPEECH_API_KEY || process.env.GEMINI_API_KEY || '')
-    ).trim();
+    const effectiveApiKey = (sttConfig.apiKey || process.env.GEMINI_API_KEY || process.env.STT_API_KEY || '').trim();
 
     if (!effectiveApiKey) {
       return NextResponse.json(
-        { error: 'API 1 Key Missing. Please enter your API Key in Transcription API Settings (API 1).' },
+        { error: 'API Key Missing. Please set GEMINI_API_KEY in your environment variables (.env.local).' },
         { status: 400 }
       );
     }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
 
     let rawTranscript = '';
     let actualProviderUsed = sttConfig.provider;
 
     if (sttConfig.provider === 'AssemblyAI') {
-      const assemblyTarget = audioUrl || buffer;
-      if (!assemblyTarget) throw new Error('No audio URL or buffer provided for AssemblyAI.');
-      rawTranscript = await transcribeWithAssemblyAI(assemblyTarget, effectiveApiKey);
-    } else if (isGeminiProvider) {
-      let geminiBuffer = buffer;
-      if (!geminiBuffer && gcsUri && objectName && sttConfig.gcsBucket) {
-        geminiBuffer = await downloadFileFromGCS(sttConfig.gcsBucket, objectName, effectiveApiKey);
-      }
-      if (!geminiBuffer) throw new Error('Could not retrieve audio buffer for Gemini Multimodal STT.');
-      rawTranscript = await transcribeWithGeminiAudio(geminiBuffer, filename, effectiveApiKey);
-      actualProviderUsed = 'Gemini Multimodal STT';
+      rawTranscript = await transcribeWithAssemblyAI(buffer, effectiveApiKey);
     } else {
-      // Default: Google Cloud Speech-to-Text with automatic Gemini fallback
-      try {
-        if (gcsUri) {
-          rawTranscript = await transcribeWithGCSUriAndLongRunning(
-            gcsUri,
-            filename,
-            effectiveApiKey,
-            sttConfig.language
-          );
-        } else if (buffer) {
-          rawTranscript = await transcribeWithGCSAndLongRunning(
-            buffer,
-            filename,
-            effectiveApiKey,
-            sttConfig.gcsBucket || process.env.GCS_BUCKET_NAME || 'qtranscript-recordings',
-            sttConfig.language
-          );
-        }
-        if (!rawTranscript || rawTranscript.trim() === '' || rawTranscript.includes('No speech recognized')) {
-          throw new Error('Google Cloud Speech returned no speech for this audio file.');
-        }
-      } catch (googleErr: any) {
-        const geminiKey = process.env.GEMINI_API_KEY || (effectiveApiKey.startsWith('AQ') ? effectiveApiKey : '');
-        if (geminiKey) {
-          console.warn('Google Cloud Speech error, falling back to Gemini Multimodal Audio STT:', googleErr.message);
-          let fallbackBuffer = buffer;
-          if (!fallbackBuffer && objectName && sttConfig.gcsBucket) {
-            fallbackBuffer = await downloadFileFromGCS(sttConfig.gcsBucket, objectName, effectiveApiKey).catch(() => null);
-          }
-          if (fallbackBuffer) {
-            rawTranscript = await transcribeWithGeminiAudio(fallbackBuffer, filename, geminiKey);
-            actualProviderUsed = 'Gemini Multimodal STT (High Precision Fallback)';
-          } else {
-            throw googleErr;
-          }
-        } else {
-          throw googleErr;
-        }
-      }
+      // Default & Gemini: Direct Gemini Multimodal STT (Zero GCS / Service Account dependencies!)
+      rawTranscript = await transcribeWithGeminiAudio(buffer, file.name, effectiveApiKey);
+      actualProviderUsed = 'Gemini Multimodal STT (High Precision)';
     }
 
     return NextResponse.json({
@@ -605,7 +178,7 @@ export async function POST(request: NextRequest) {
       transcriptionStatus: 'transcription_completed',
       rawTranscript,
       transcriptionProvider: actualProviderUsed,
-      filename,
+      filename: file.name,
       processedAt: new Date().toISOString()
     });
 

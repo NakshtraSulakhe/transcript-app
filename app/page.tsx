@@ -51,10 +51,10 @@ export default function Home() {
 
   // API 1 Configuration State (Transcription API)
   const [sttConfig, setSttConfig] = useState<STTConfig>({
-    provider: 'GoogleCloud',
+    provider: 'Gemini',
     apiKey: '',
-    endpoint: 'https://speech.googleapis.com/v1/speech:longrunningrecognize',
-    gcsBucket: 'qtranscript-recordings'
+    endpoint: '',
+    gcsBucket: ''
   });
 
   // API 2 Configuration State (AI Processing API)
@@ -116,9 +116,14 @@ export default function Home() {
       ? savedAiModel 
       : 'gemini-3.6-flash';
 
-    if (savedSttKey || savedSttBucket) {
-      setSttConfig(prev => ({ ...prev, apiKey: savedSttKey || '', provider: savedSttProvider || 'GoogleCloud', gcsBucket: savedSttBucket || '' }));
-    }
+    const effectiveProvider = (!savedSttProvider || savedSttProvider === 'GoogleCloud') ? 'Gemini' : savedSttProvider;
+
+    setSttConfig(prev => ({
+      ...prev,
+      apiKey: savedSttKey || '',
+      provider: effectiveProvider,
+      gcsBucket: savedSttBucket || ''
+    }));
     if (savedAiKey || savedAiModel) {
       setAiConfig(prev => ({ ...prev, apiKey: savedAiKey || '', model: validModel }));
     }
@@ -273,63 +278,7 @@ export default function Home() {
     setShowSettingsModal(false);
   };
 
-  // Helper: Request V4 Signed Upload URL from Server & Upload DIRECTLY from Browser to Google Cloud Storage
-  const uploadAudioToGCSDirectly = async (
-    audioFile: File
-  ): Promise<{ gcsUri?: string; objectName?: string; audioUrl?: string }> => {
-    if (sttConfig.provider === 'AssemblyAI') {
-      const assemblyKey = (sttConfig.apiKey || '').trim();
-      const res = await fetch('https://api.assemblyai.com/v2/upload', {
-        method: 'POST',
-        headers: { Authorization: assemblyKey },
-        body: audioFile
-      });
-      if (!res.ok) throw new Error(`AssemblyAI Upload Failed (${res.status})`);
-      const data = await res.json();
-      return { audioUrl: data.upload_url };
-    }
-
-    const mimeType = audioFile.type || 'audio/wav';
-
-    // 1. Request V4 Signed Upload URL from Next.js server endpoint (/api/storage/signed-url)
-    const urlRes = await fetch('/api/storage/signed-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filename: audioFile.name,
-        mimeType,
-        sttConfig
-      })
-    });
-
-    const urlData = await urlRes.json();
-    if (!urlRes.ok || !urlData.uploadUrl) {
-      throw new Error(urlData.error || 'Failed to generate GCS V4 Signed Upload URL.');
-    }
-
-    const { uploadUrl, objectName, gcsUri } = urlData;
-
-    // 2. Upload recording DIRECTLY from Browser to Google Cloud Storage Signed URL (HTTP PUT)
-    // Binary audio goes directly: Browser -> Google Cloud Storage (bypasses Vercel 4.5MB payload limit)
-    const directUploadRes = await fetch(uploadUrl, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': mimeType
-      },
-      body: audioFile
-    });
-
-    if (!directUploadRes.ok) {
-      const errText = await directUploadRes.text().catch(() => '');
-      throw new Error(
-        `Direct GCS PUT Upload Failed (HTTP ${directUploadRes.status}). ${errText || 'Please verify GCS Bucket CORS configuration permits PUT from this origin.'}`
-      );
-    }
-
-    return { gcsUri, objectName };
-  };
-
-  // STEP 1: API 1 — Transcribe Audio Recording -> raw_transcript ONLY
+  // STEP 1: API 1 — Transcribe Audio Recording with Gemini Audio STT
   const handleRunTranscriptionOnly = async () => {
     if (!file) {
       alert('Please select a call recording file to transcribe.');
@@ -337,20 +286,19 @@ export default function Home() {
     }
 
     setIsTranscribing(true);
-    setWorkflowStatus('uploading');
+    setWorkflowStatus('transcription_processing');
 
     try {
-      const cloudUploadResult = await uploadAudioToGCSDirectly(file);
-      setWorkflowStatus('transcription_processing');
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('sttConfig', JSON.stringify({
+        provider: 'Gemini',
+        language: sttConfig.language || 'en-US'
+      }));
 
       const res = await fetch('/api/stt/transcribe', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...cloudUploadResult,
-          filename: file.name,
-          sttConfig
-        })
+        body: formData
       });
 
       const data = await res.json();
@@ -429,20 +377,19 @@ export default function Home() {
 
     if (file) {
       setIsTranscribing(true);
-      setWorkflowStatus('uploading');
+      setWorkflowStatus('transcription_processing');
 
       try {
-        const cloudUploadResult = await uploadAudioToGCSDirectly(file);
-        setWorkflowStatus('transcription_processing');
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('sttConfig', JSON.stringify({
+          provider: 'Gemini',
+          language: sttConfig.language || 'en-US'
+        }));
 
         const res = await fetch('/api/stt/transcribe', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...cloudUploadResult,
-            filename: file.name,
-            sttConfig
-          })
+          body: formData
         });
 
         const data = await res.json();

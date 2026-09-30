@@ -4,15 +4,15 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const apiKey = body.apiKey;
-    const provider = body.provider || 'GoogleCloud';
-    const isGemini = provider === 'Gemini' || provider === 'GoogleGemini';
+    const provider = body.provider || 'Gemini';
+    const isGemini = provider === 'Gemini' || provider === 'GoogleGemini' || provider === 'GoogleCloud';
     const effectiveKey = isGemini
       ? (apiKey || process.env.GEMINI_API_KEY)
-      : (apiKey || process.env.STT_API_KEY || process.env.GOOGLE_SPEECH_API_KEY || process.env.ASSEMBLYAI_API_KEY);
+      : (apiKey || process.env.STT_API_KEY || process.env.ASSEMBLYAI_API_KEY);
 
     if (!effectiveKey) {
       return NextResponse.json(
-        { success: false, error: 'API key is missing. Please enter your API key in Transcription API settings.' },
+        { success: false, error: 'API key is missing. Please set GEMINI_API_KEY in environment variables or configuration modal.' },
         { status: 400 }
       );
     }
