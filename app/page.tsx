@@ -53,7 +53,8 @@ export default function Home() {
   const [sttConfig, setSttConfig] = useState<STTConfig>({
     provider: 'GoogleCloud',
     apiKey: '',
-    endpoint: 'https://speech.googleapis.com/v1/speech:recognize'
+    endpoint: 'https://speech.googleapis.com/v1/speech:longrunningrecognize',
+    gcsBucket: 'qtranscript-recordings'
   });
 
   // API 2 Configuration State (AI Processing API)
@@ -272,6 +273,54 @@ export default function Home() {
     setShowSettingsModal(false);
   };
 
+  // Helper to perform direct-to-cloud upload (bypassing Vercel 4.5MB payload limit)
+  const uploadAudioDirectlyToCloud = async (audioFile: File): Promise<{ gcsUri?: string; objectName?: string; audioUrl?: string }> => {
+    // 1. Get signed / direct upload URL from backend
+    const urlRes = await fetch('/api/stt/upload-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: audioFile.name,
+        mimeType: audioFile.type || 'audio/wav',
+        sttConfig
+      })
+    });
+
+    const urlData = await urlRes.json();
+    if (!urlRes.ok || !urlData.success || !urlData.uploadUrl) {
+      throw new Error(urlData.error || 'Failed to generate cloud upload URL');
+    }
+
+    // 2. Perform direct upload from Browser to GCS / AssemblyAI
+    const uploadHeaders: Record<string, string> = { ...(urlData.headers || {}) };
+    if (!uploadHeaders['Content-Type']) {
+      uploadHeaders['Content-Type'] = audioFile.type || 'audio/wav';
+    }
+
+    const directUploadRes = await fetch(urlData.uploadUrl, {
+      method: urlData.method || 'PUT',
+      headers: uploadHeaders,
+      body: audioFile
+    });
+
+    if (!directUploadRes.ok) {
+      const uploadErrText = await directUploadRes.text().catch(() => '');
+      throw new Error(
+        `Direct Cloud Upload Failed (${directUploadRes.status}). ${uploadErrText || 'Please check GCS bucket permissions or CORS settings.'}`
+      );
+    }
+
+    if (urlData.provider === 'AssemblyAI') {
+      const assemblyData = await directUploadRes.json().catch(() => ({}));
+      return { audioUrl: assemblyData.upload_url };
+    }
+
+    return {
+      gcsUri: urlData.gcsUri,
+      objectName: urlData.objectName
+    };
+  };
+
   // STEP 1: API 1 — Transcribe Audio Recording -> raw_transcript ONLY
   const handleRunTranscriptionOnly = async () => {
     if (!file) {
@@ -280,16 +329,20 @@ export default function Home() {
     }
 
     setIsTranscribing(true);
-    setWorkflowStatus('transcription_processing');
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('sttConfig', JSON.stringify(sttConfig));
+    setWorkflowStatus('uploading');
 
     try {
+      const cloudUploadResult = await uploadAudioDirectlyToCloud(file);
+      setWorkflowStatus('transcription_processing');
+
       const res = await fetch('/api/stt/transcribe', {
         method: 'POST',
-        body: formData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...cloudUploadResult,
+          filename: file.name,
+          sttConfig
+        })
       });
 
       const data = await res.json();
@@ -368,16 +421,20 @@ export default function Home() {
 
     if (file) {
       setIsTranscribing(true);
-      setWorkflowStatus('transcription_processing');
-
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('sttConfig', JSON.stringify(sttConfig));
+      setWorkflowStatus('uploading');
 
       try {
+        const cloudUploadResult = await uploadAudioDirectlyToCloud(file);
+        setWorkflowStatus('transcription_processing');
+
         const res = await fetch('/api/stt/transcribe', {
           method: 'POST',
-          body: formData
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...cloudUploadResult,
+            filename: file.name,
+            sttConfig
+          })
         });
 
         const data = await res.json();
