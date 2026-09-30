@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { CAMPAIGN_ASSETS, DEFAULT_CAMPAIGNS } from '@/lib/campaigns';
 import { STTConfig, AIConfig, LeadInfo, CampaignInfo, WorkflowStatus } from '@/lib/types';
 import { DEFAULT_AI_PROMPT_TEMPLATE } from '@/lib/defaultPrompt';
+import { compressAudioForSTT } from '@/lib/audioCompressor';
 
 const SAMPLE_PROSPECTS = {
   laura: {
@@ -51,10 +52,9 @@ export default function Home() {
 
   // API 1 Configuration State (Transcription API)
   const [sttConfig, setSttConfig] = useState<STTConfig>({
-    provider: 'GoogleCloud',
+    provider: 'Gemini',
     apiKey: '',
-    endpoint: 'https://speech.googleapis.com/v1/speech:longrunningrecognize',
-    gcsBucket: 'qtranscript-recordings'
+    language: 'en-US'
   });
 
   // API 2 Configuration State (AI Processing API)
@@ -273,63 +273,7 @@ export default function Home() {
     setShowSettingsModal(false);
   };
 
-  // Helper: Request V4 Signed Upload URL from Server & Upload DIRECTLY from Browser to Google Cloud Storage
-  const uploadAudioToGCSDirectly = async (
-    audioFile: File
-  ): Promise<{ gcsUri?: string; objectName?: string; audioUrl?: string }> => {
-    if (sttConfig.provider === 'AssemblyAI') {
-      const assemblyKey = (sttConfig.apiKey || '').trim();
-      const res = await fetch('https://api.assemblyai.com/v2/upload', {
-        method: 'POST',
-        headers: { Authorization: assemblyKey },
-        body: audioFile
-      });
-      if (!res.ok) throw new Error(`AssemblyAI Upload Failed (${res.status})`);
-      const data = await res.json();
-      return { audioUrl: data.upload_url };
-    }
-
-    const mimeType = audioFile.type || 'audio/wav';
-
-    // 1. Request V4 Signed Upload URL from Next.js server endpoint (/api/storage/signed-url)
-    const urlRes = await fetch('/api/storage/signed-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filename: audioFile.name,
-        mimeType,
-        sttConfig
-      })
-    });
-
-    const urlData = await urlRes.json();
-    if (!urlRes.ok || !urlData.uploadUrl) {
-      throw new Error(urlData.error || 'Failed to generate GCS V4 Signed Upload URL.');
-    }
-
-    const { uploadUrl, objectName, gcsUri } = urlData;
-
-    // 2. Upload recording DIRECTLY from Browser to Google Cloud Storage Signed URL (HTTP PUT)
-    // Binary audio goes directly: Browser -> Google Cloud Storage (bypasses Vercel 4.5MB payload limit)
-    const directUploadRes = await fetch(uploadUrl, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': mimeType
-      },
-      body: audioFile
-    });
-
-    if (!directUploadRes.ok) {
-      const errText = await directUploadRes.text().catch(() => '');
-      throw new Error(
-        `Direct GCS PUT Upload Failed (HTTP ${directUploadRes.status}). ${errText || 'Please verify GCS Bucket CORS configuration permits PUT from this origin.'}`
-      );
-    }
-
-    return { gcsUri, objectName };
-  };
-
-  // STEP 1: API 1 — Transcribe Audio Recording -> raw_transcript ONLY
+  // STEP 1: API 1 — Transcribe Audio Recording with Client-Side Compression & Gemini Audio STT
   const handleRunTranscriptionOnly = async () => {
     if (!file) {
       alert('Please select a call recording file to transcribe.');
@@ -337,20 +281,34 @@ export default function Home() {
     }
 
     setIsTranscribing(true);
-    setWorkflowStatus('uploading');
+    setWorkflowStatus('transcription_processing');
 
     try {
-      const cloudUploadResult = await uploadAudioToGCSDirectly(file);
-      setWorkflowStatus('transcription_processing');
+      // 1. Client-Side Audio Compression (Mono 16 kHz 32 kbps MP3) before uploading to Vercel
+      console.log('Starting client-side audio compression for speech transcription...');
+      const compressionResult = await compressAudioForSTT(file, 32);
+      const compressedFile = compressionResult.compressedFile;
+
+      // 2. Check compressed recording size against 4MB ceiling
+      const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024; // 4 MB
+      if (compressedFile.size > MAX_PAYLOAD_BYTES) {
+        alert('Recording is still too large after compression.');
+        setWorkflowStatus('error');
+        setIsTranscribing(false);
+        return;
+      }
+
+      // 3. Send compressed audio using multipart/form-data directly to /api/stt/transcribe
+      const formData = new FormData();
+      formData.append('file', compressedFile);
+      formData.append('sttConfig', JSON.stringify({
+        provider: 'Gemini',
+        language: sttConfig.language || 'en-US'
+      }));
 
       const res = await fetch('/api/stt/transcribe', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...cloudUploadResult,
-          filename: file.name,
-          sttConfig
-        })
+        body: formData
       });
 
       const data = await res.json();
@@ -429,20 +387,31 @@ export default function Home() {
 
     if (file) {
       setIsTranscribing(true);
-      setWorkflowStatus('uploading');
+      setWorkflowStatus('transcription_processing');
 
       try {
-        const cloudUploadResult = await uploadAudioToGCSDirectly(file);
-        setWorkflowStatus('transcription_processing');
+        console.log('Starting client-side audio compression...');
+        const compressionResult = await compressAudioForSTT(file, 32);
+        const compressedFile = compressionResult.compressedFile;
+
+        const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
+        if (compressedFile.size > MAX_PAYLOAD_BYTES) {
+          alert('Recording is still too large after compression.');
+          setWorkflowStatus('error');
+          setIsTranscribing(false);
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', compressedFile);
+        formData.append('sttConfig', JSON.stringify({
+          provider: 'Gemini',
+          language: sttConfig.language || 'en-US'
+        }));
 
         const res = await fetch('/api/stt/transcribe', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...cloudUploadResult,
-            filename: file.name,
-            sttConfig
-          })
+          body: formData
         });
 
         const data = await res.json();
