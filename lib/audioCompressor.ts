@@ -1,5 +1,3 @@
-import lamejs from 'lamejs';
-
 export interface CompressionResult {
   compressedFile: File;
   originalSize: number;
@@ -7,6 +5,53 @@ export interface CompressionResult {
   compressionRatio: number;
   mimeType: string;
   filename: string;
+}
+
+// Safely initialize global variables expected by lamejs in bundled browser environments
+function getMp3EncoderClass() {
+  if (typeof window !== 'undefined') {
+    const g = window as any;
+    g.MPEGMode = g.MPEGMode || {};
+    g.Lame = g.Lame || {};
+    g.BitStream = g.BitStream || {};
+    g.BSVal = g.BSVal || {};
+  }
+  const lame = require('lamejs');
+  return lame.Mp3Encoder || lame.default?.Mp3Encoder || lame;
+}
+
+// Fallback Mono 16kHz WAV encoder (speech-optimized PCM)
+function encodeMono16kHzWav(samples: Int16Array, sampleRate: number): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono (1 channel)
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true); // 16-bit
+  writeString(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+
+  let index = 44;
+  for (let i = 0; i < samples.length; i++) {
+    view.setInt16(index, samples[i], true);
+    index += 2;
+  }
+
+  return new Blob([view], { type: 'audio/wav' });
 }
 
 /**
@@ -76,51 +121,77 @@ export async function compressAudioForSTT(
 
   audioCtx.close();
 
-  // 4. Encode 16kHz Mono PCM to MP3 at 32 kbps using lamejs
-  const mp3encoder = new (lamejs as any).Mp3Encoder(targetChannels, targetSampleRate, targetKbps);
-  const mp3Data: Uint8Array[] = [];
+  const baseName = inputFile.name.substring(0, inputFile.name.lastIndexOf('.')) || inputFile.name;
 
-  // Encode in chunks of 1152 samples
-  const sampleBlockSize = 1152;
-  for (let i = 0; i < pcmSamples.length; i += sampleBlockSize) {
-    const sampleChunk = pcmSamples.subarray(i, i + sampleBlockSize);
-    const mp3buf = mp3encoder.encodeBuffer(sampleChunk);
+  // 4. Try MP3 encoding with lamejs (Mono 16kHz 32kbps)
+  try {
+    const Mp3Encoder = getMp3EncoderClass();
+    const mp3encoder = new Mp3Encoder(targetChannels, targetSampleRate, targetKbps);
+    const mp3Data: Uint8Array[] = [];
+
+    const sampleBlockSize = 1152;
+    for (let i = 0; i < pcmSamples.length; i += sampleBlockSize) {
+      const sampleChunk = pcmSamples.subarray(i, i + sampleBlockSize);
+      const mp3buf = mp3encoder.encodeBuffer(sampleChunk);
+      if (mp3buf.length > 0) {
+        mp3Data.push(new Uint8Array(mp3buf));
+      }
+    }
+
+    const mp3buf = mp3encoder.flush();
     if (mp3buf.length > 0) {
       mp3Data.push(new Uint8Array(mp3buf));
     }
+
+    const mimeType = 'audio/mp3';
+    const filename = `${baseName}_compressed.mp3`;
+    const compressedBlob = new Blob(mp3Data as BlobPart[], { type: mimeType });
+    const compressedFile = new File([compressedBlob], filename, { type: mimeType });
+
+    const compressedSize = compressedFile.size;
+    const compressedMB = (compressedSize / (1024 * 1024)).toFixed(2);
+    const compressionRatio = Math.round((1 - compressedSize / originalSize) * 100);
+
+    console.log(`Original size: ${originalMB} MB (${originalSize} bytes)`);
+    console.log(`Compressed size: ${compressedMB} MB (${compressedSize} bytes)`);
+    console.log(`Compression ratio: ${compressionRatio}% reduction`);
+    console.log(`Final MIME type: ${mimeType}`);
+    console.log(`Final filename: ${filename}`);
+
+    return {
+      compressedFile,
+      originalSize,
+      compressedSize,
+      compressionRatio,
+      mimeType,
+      filename
+    };
+  } catch (mp3Err) {
+    console.warn('MP3 encoding failed, using Mono 16kHz WAV fallback:', mp3Err);
+    
+    // Fallback: Mono 16kHz 16-bit WAV
+    const mimeType = 'audio/wav';
+    const filename = `${baseName}_16k_mono.wav`;
+    const wavBlob = encodeMono16kHzWav(pcmSamples, targetSampleRate);
+    const compressedFile = new File([wavBlob], filename, { type: mimeType });
+
+    const compressedSize = compressedFile.size;
+    const compressedMB = (compressedSize / (1024 * 1024)).toFixed(2);
+    const compressionRatio = Math.round((1 - compressedSize / originalSize) * 100);
+
+    console.log(`Original size: ${originalMB} MB (${originalSize} bytes)`);
+    console.log(`Compressed size: ${compressedMB} MB (${compressedSize} bytes)`);
+    console.log(`Compression ratio: ${compressionRatio}% reduction`);
+    console.log(`Final MIME type: ${mimeType}`);
+    console.log(`Final filename: ${filename}`);
+
+    return {
+      compressedFile,
+      originalSize,
+      compressedSize,
+      compressionRatio,
+      mimeType,
+      filename
+    };
   }
-
-  // Flush MP3 encoder
-  const mp3buf = mp3encoder.flush();
-  if (mp3buf.length > 0) {
-    mp3Data.push(new Uint8Array(mp3buf));
-  }
-
-  // 5. Create compressed File object
-  const mimeType = 'audio/mp3';
-  const baseName = inputFile.name.substring(0, inputFile.name.lastIndexOf('.')) || inputFile.name;
-  const filename = `${baseName}_compressed.mp3`;
-
-  const compressedBlob = new Blob(mp3Data as BlobPart[], { type: mimeType });
-  const compressedFile = new File([compressedBlob], filename, { type: mimeType });
-
-  const compressedSize = compressedFile.size;
-  const compressedMB = (compressedSize / (1024 * 1024)).toFixed(2);
-  const compressionRatio = Math.round((1 - compressedSize / originalSize) * 100);
-
-  // 6. Console Logging as required
-  console.log(`Original size: ${originalMB} MB (${originalSize} bytes)`);
-  console.log(`Compressed size: ${compressedMB} MB (${compressedSize} bytes)`);
-  console.log(`Compression ratio: ${compressionRatio}% reduction`);
-  console.log(`Final MIME type: ${mimeType}`);
-  console.log(`Final filename: ${filename}`);
-
-  return {
-    compressedFile,
-    originalSize,
-    compressedSize,
-    compressionRatio,
-    mimeType,
-    filename
-  };
 }
