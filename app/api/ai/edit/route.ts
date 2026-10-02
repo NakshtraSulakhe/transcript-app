@@ -59,16 +59,16 @@ export async function POST(request: NextRequest) {
 
     const prompt = resolvedPrompt;
 
-    const requestedModel = aiConfig.model || 'gemini-3.6-flash';
+    const requestedModel = aiConfig.model || 'gemini-3.8-flash';
     const temperature = aiConfig.temperature ?? 0.2;
     const maxTokens = aiConfig.maxTokens ?? 2048;
 
     const modelsToTry = Array.from(new Set([
       requestedModel,
+      'gemini-3.8-flash',
       'gemini-3.6-flash',
       'gemini-3.5-flash',
-      'gemini-3.1-flash-lite',
-      'gemini-3-flash-preview'
+      'gemini-3.1-flash-lite'
     ]));
 
     let lastError = '';

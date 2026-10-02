@@ -4,7 +4,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const apiKey = body.apiKey || process.env.GEMINI_API_KEY;
-    const requestedModel = body.model || 'gemini-3.6-flash';
+    const requestedModel = body.model || 'gemini-3.8-flash';
     const provider = body.provider || 'Google AI Studio';
 
     if (!apiKey) {
@@ -17,10 +17,10 @@ export async function POST(request: NextRequest) {
     // List of valid model identifiers for Google AI Studio v1beta API
     const modelsToTry = Array.from(new Set([
       requestedModel,
+      'gemini-3.8-flash',
       'gemini-3.6-flash',
       'gemini-3.5-flash',
-      'gemini-3.1-flash-lite',
-      'gemini-3-flash-preview'
+      'gemini-3.1-flash-lite'
     ]));
 
     let lastErrorMessage = '';

@@ -61,7 +61,7 @@ export default function Home() {
   const [aiConfig, setAiConfig] = useState<AIConfig>({
     provider: 'Google AI Studio',
     apiKey: '',
-    model: 'gemini-3.6-flash',
+    model: 'gemini-3.8-flash',
     temperature: 0.2,
     maxTokens: 2048
   });
@@ -1200,10 +1200,10 @@ export default function Home() {
                     onChange={(e) => setAiConfig({ ...aiConfig, model: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
                   >
-                    <option value="gemini-3.6-flash">gemini-3.6-flash (Recommended - Fast &amp; Powerful)</option>
+                    <option value="gemini-3.8-flash">gemini-3.8-flash (Recommended - Fast &amp; Powerful)</option>
+                    <option value="gemini-3.6-flash">gemini-3.6-flash</option>
                     <option value="gemini-3.5-flash">gemini-3.5-flash (High Quality &amp; Fast)</option>
                     <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Ultra Fast &amp; Lightweight)</option>
-                    <option value="gemini-3-flash-preview">gemini-3-flash-preview (Preview Tier)</option>
                   </select>
                 </div>
 

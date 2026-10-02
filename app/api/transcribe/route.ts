@@ -104,7 +104,7 @@ async function processTranscriptWithGemini(
   geminiConfig?: GeminiConfig
 ) {
   const apiKey = geminiConfig?.apiKey || process.env.GEMINI_API_KEY;
-  const model = geminiConfig?.model || 'gemini-2.0-flash';
+  const model = geminiConfig?.model || 'gemini-3.8-flash';
   const temperature = geminiConfig?.temperature ?? 0.2;
   const maxTokens = geminiConfig?.maxTokens ?? 2048;
 

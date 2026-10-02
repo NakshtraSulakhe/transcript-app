@@ -25,7 +25,7 @@ RULES:
 4. Capture natural speech accurately including affirmations ("Yes", "I believe so", "I think so", "Ok", "Yeah") and numbers/timelines ("six months", "three months").
 5. Return ONLY the verbatim transcript lines.`;
 
-  const models = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash'];
+  const models = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'];
   let lastError = '';
 
   for (const model of models) {
